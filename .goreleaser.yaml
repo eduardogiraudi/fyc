@@ -1,0 +1,68 @@
+# GoReleaser configuration (schema v2)
+version: 2
+project_name: fuckyourcli
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    # Use -buildvcs=false to avoid git issues in sandbox/CI
+    flags:
+      - -buildvcs=false
+    binary: fuckyourcli
+    # Bake the version in: without it `--version` reports "dev"
+    ldflags:
+      - '-s -w -X main.version={{ .Version }}{{ if index .Env "CODEX_VERSION" }} -X fuckyourcli/codexversion.BuildVersion={{ index .Env "CODEX_VERSION" }}{{ end }}'
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Windows archives are zips, everything else is a tar.gz
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # The default file list (README/LICENSE/CHANGELOG) is replaced when `files`
+    # is set, so it has to be listed again. skills/ and completions/ ship whole;
+    # only the catalog JSON is taken from models/ (shipping the directory would
+    # also drop the package's .go sources into the archive).
+    # The catalog must exist (and be committed) before tagging: run
+    # update_catalog.sh; a missing file makes GoReleaser fail rather than ship a
+    # half-full models/.
+    files:
+      - LICENSE*
+      - README*
+      - CHANGELOG*
+      - src: skills
+        dst: skills
+      - src: completions
+        dst: completions
+      - src: models/catalog.json
+        dst: models
+        # dst is a directory and the matched path is preserved, so without this
+        # the file would land at models/models/catalog.json inside the archive.
+        strip_parent: true
+
+checksum:
+  name_template: 'checksums.txt'
+
+# CI passes the reviewed CHANGELOG.md section through --release-notes.
+# Keep generation enabled: disable also discards an explicit notes file.
+changelog:
+  use: git
+
+# The release repository (owner/name) is inferred from the origin remote.
+# To override it explicitly, use:
+#   release:
+#     github:
+#       owner: eduardo
+#       name: fuckyourcli

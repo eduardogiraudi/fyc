@@ -1,0 +1,3 @@
+#!/bin/bash
+golangci-lint run --default none -E unused -E ineffassign -E unparam ./...
+go build ./...; go vet ./...;

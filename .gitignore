@@ -1,0 +1,6 @@
+build/
+fuckyourcli
+build/*
+ignore/
+.ignore/
+tmp_probe/

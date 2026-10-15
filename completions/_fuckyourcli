@@ -1,0 +1,26 @@
+#compdef fuckyourcli
+# fuckyourcli — zsh completion. Installed by setup.sh / install_mac.sh.
+# ~/.zsh/completions is not in $fpath by default: the installer registers it in ~/.zshrc.
+
+_fuckyourcli() {
+    local -a main_commands global_flags serve_flags
+    main_commands=(config auto serve sandbox status update models)
+    global_flags=(--help --version --hash)
+    serve_flags=(--addr --token --permissions --cors --max-threads --hitl --interrupts --interaction-timeout)
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' main_commands
+        _describe -o 'option' global_flags
+        return 0
+    fi
+
+    case "${words[2]}" in
+        serve)   _describe 'flag' serve_flags ;;
+        config)  _values 'subcommand' show set reset ;;
+        auto)    _values 'subcommand' enable disable status ;;
+        sandbox) _values 'subcommand' setup status reset ;;
+        models)  _values 'subcommand' update ;;
+        *)       _values 'flag' --help --version --hash ;;
+    esac
+}
+_fuckyourcli "$@"

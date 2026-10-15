@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+source scripts/workflow-common.sh
+
+if [ "$#" -gt 1 ]; then
+  workflow_error 'Usage: ./push ["type(scope): summary"]'
+fi
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+git add -A
+if git diff --cached --quiet; then
+  workflow_error "No staged changes to commit."
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+head=$(git rev-parse HEAD)
+git diff --cached --binary > "$work/staged.patch"
+{
+  if [ "$#" -eq 1 ]; then
+    printf '%s\n\n' "$1"
+  else
+    printf 'feat: <what was added>\n\nfix: <what was fixed>\n\n'
+  fi
+  echo '# Write one or more English entries: type(scope): summary'
+  echo '# Complete feat and/or fix; unused default placeholders and empty entries are ignored.'
+  echo '# Add more typed entries as needed, separated by a blank line.'
+  echo '# Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert'
+  echo '# Scope is optional. Use ! or a BREAKING CHANGE: footer after the relevant entry.'
+  echo '# Delete all non-comment text to cancel. The first completed entry is the subject.'
+  echo '# Review the staged diff with git diff --cached in another terminal if needed.'
+  echo '#'
+  git diff --cached --stat | sed 's/^/# /'
+} > "$work/message"
+
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()]+\))?!?: [^[:space:]].*$'
+typed_start='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)([:(!]|$)'
+while true; do
+  workflow_edit "$work/message"
+  awk '
+    /^#/ { next }
+    /^feat: <what was added>[[:space:]]*$/ { next }
+    /^fix: <what was fixed>[[:space:]]*$/ { next }
+    /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()]+\))?!?:[[:space:]]*$/ { next }
+    !started && /^[[:space:]]*$/ { next }
+    {
+      if (started && previous != "" && $0 ~ /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()]+\))?!?: /) print ""
+      started = 1
+      print
+      previous = $0
+    }
+  ' "$work/message" > "$work/clean"
+  subject=$(awk 'NF { print; exit }' "$work/clean")
+  [ -n "$subject" ] || workflow_error "Commit cancelled; changes remain staged."
+  valid=true
+  [[ "$subject" =~ $pattern ]] || valid=false
+  fence=''
+  while IFS= read -r line; do
+    if [[ "$line" == \`\`\`* || "$line" == '~~~'* ]]; then
+      marker=${line:0:3}
+      if [ -z "$fence" ]; then fence=$marker; elif [ "$fence" = "$marker" ]; then fence=''; fi
+      continue
+    fi
+    [ -z "$fence" ] || continue
+    if [[ "$line" =~ $typed_start ]] && ! [[ "$line" =~ $pattern ]]; then
+      valid=false
+    fi
+  done < "$work/clean"
+  if [ "$valid" = true ] && ! grep -Eq '<(what was added|what was fixed|describe staged changes)>' "$work/clean"; then
+    break
+  fi
+  echo 'Use type(scope): summary for every typed entry and replace custom placeholders.' >&2
+  read -r -p 'Edit again? [y/N] ' answer || answer=n
+  case "$answer" in y|Y|yes|YES) ;; *) workflow_error "Commit cancelled; changes remain staged." ;; esac
+done
+
+[ "$(git rev-parse HEAD)" = "$head" ] || workflow_error "HEAD changed while editing; run ./push again."
+git diff --cached --binary > "$work/current.patch"
+cmp -s "$work/staged.patch" "$work/current.patch" || workflow_error "Staged changes changed while editing; run ./push again."
+git -c core.commentChar='#' commit --cleanup=strip -F "$work/clean"
+git push

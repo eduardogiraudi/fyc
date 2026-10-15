@@ -1,0 +1,6 @@
+This skill ("make-skill") is derived from "skill-creator" by Anthropic, PBC
+(https://github.com/anthropics/skills), licensed under the Apache License 2.0.
+Modified: condensed and rewritten, eval/benchmark tooling removed,
+agent-agnostic wording, installation section added, renamed to "make-skill".
+The full text of the Apache License 2.0 is in the LICENSE file at the root
+of this repository.
