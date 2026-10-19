@@ -35,3 +35,20 @@ jobs:
 
       - name: Build
         run: go build -buildvcs=false ./...
+
+      # The installers are shipped as-is: a parse error only shows up on a
+      # user's machine, so parse every script here before release.
+      - name: Parse PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem -Recurse -Filter *.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($e in $errors) {
+              $failed = $true
+              Write-Host ($file.FullName + ':' + $e.Extent.StartLineNumber + ': ' + $e.Message)
+            }
+          }
+          if ($failed) { exit 1 }

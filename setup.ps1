@@ -278,7 +278,7 @@ try {
             } elseif ($locked) {
                 Write-Warning "ExecutionPolicy blocked by group policy ($effective): `$PROFILE will not load; an administrator must allow local scripts"
             } else {
-                Write-Host "ExecutionPolicy is $effective: `$PROFILE would not be executed, so completion would stay inactive."
+                Write-Host "ExecutionPolicy is ${effective}: `$PROFILE would not be executed, so completion would stay inactive."
                 $answer = ''
                 try {
                     $answer = Read-Host 'Set RemoteSigned for the current user? The change is GLOBAL (all user scripts). [y/N]'
