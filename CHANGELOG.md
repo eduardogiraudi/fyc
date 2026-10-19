@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-19
+
+### Added
+
+- tools: cap read/grep/get_anchors output with paging and truncation notes (`f04b5bd`).
+
 ## [1.0.2] - 2026-10-19
 
 ### Fixed
