@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"fuckyourcli/reasoning"
+	"fuckyourcli/store"
 	"fuckyourcli/types"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -65,6 +68,9 @@ type anthropicContentBlock struct {
 	ToolUseID string                  `json:"tool_use_id,omitempty"`
 	Content   interface{}             `json:"content,omitempty"`
 	Source    *anthropicImageSource   `json:"source,omitempty"`
+	// CacheControl marks an explicit cache breakpoint. Never set on a thinking
+	// block, on an empty text block or on a tool_result without content.
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicImageSource is the base64 image source used inside content blocks
@@ -84,17 +90,170 @@ type anthropicTool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema"`
+	// CacheControl marks the last tool of the list: tool schemas are the most
+	// static and most reused part of the prompt.
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheControl marks a cache breakpoint: either the top-level field
+// of the Messages API (automatic caching, where the server places the
+// breakpoint on the last cacheable block and moves it forward as the
+// conversation grows) or a per-block one on tools, system blocks and message
+// content. Either way the marked prefix is written once and read at a fraction
+// of the input price on every later turn.
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+// Caching is requested in two layers. The static prefix (tool schemas, system
+// prompt) is pinned with explicit breakpoints, because it must survive a tail
+// that diverges (a pruned screenshot, a mode switch, compaction). The growing
+// conversation is left to the top-level automatic breakpoint, which the API
+// moves forward on its own; when that field is unavailable the tail is pinned
+// explicitly instead. Rejections walk this ladder down, never back up.
+const (
+	anthropicCacheAuto   = iota // top-level automatic caching + static breakpoints
+	anthropicCacheBlocks        // explicit breakpoints only (static + rolling)
+	anthropicCacheNone          // no cache_control at all
+)
+
+// anthropicCacheLevel starts at zero (automatic) and only ever degrades. It is
+// process-wide because buildProvider builds a new provider on every turn.
+var anthropicCacheLevel atomic.Int32
+
+// anthropicCacheMode reports how this request may ask for caching.
+// FYC_ANTHROPIC_NO_CACHE=1 skips caching entirely, for a backend that refuses
+// the field without a usable error message.
+func anthropicCacheMode() int {
+	if os.Getenv("FYC_ANTHROPIC_NO_CACHE") == "1" {
+		return anthropicCacheNone
+	}
+	lvl := int(anthropicCacheLevel.Load())
+	if lvl < anthropicCacheAuto || lvl > anthropicCacheNone {
+		return anthropicCacheAuto
+	}
+	return lvl
+}
+
+// degradeAnthropicCache steps one level down after a refusal and returns the
+// level the retry must use.
+func degradeAnthropicCache(from int) int {
+	next := min(from+1, anthropicCacheNone)
+	for {
+		cur := int(anthropicCacheLevel.Load())
+		if next <= cur {
+			// Another request already degraded further: follow the process level
+			// so the retry never asks for more caching than the endpoint accepted.
+			return cur
+		}
+		if anthropicCacheLevel.CompareAndSwap(int32(cur), int32(next)) {
+			store.Notice("anthropic: prompt caching refused by the endpoint (level %d → %d)", from, next)
+			return next
+		}
+	}
+}
+
+func ephemeralCacheControl() *anthropicCacheControl {
+	return &anthropicCacheControl{Type: "ephemeral"}
+}
+
+// setAnthropicCache places the breakpoints for mode. It clears first, so a
+// retry can rebuild the body at a lower level without leftovers.
+func setAnthropicCache(body *anthropicRequest, mode int) {
+	body.CacheControl = nil
+	for i := range body.Tools {
+		body.Tools[i].CacheControl = nil
+	}
+	for i := range body.System {
+		body.System[i].CacheControl = nil
+	}
+	for i := range body.Messages {
+		for j := range body.Messages[i].Content {
+			body.Messages[i].Content[j].CacheControl = nil
+		}
+	}
+	if mode == anthropicCacheNone {
+		return
+	}
+	if len(body.Tools) > 0 {
+		body.Tools[len(body.Tools)-1].CacheControl = ephemeralCacheControl()
+	}
+	if len(body.System) > 0 {
+		body.System[len(body.System)-1].CacheControl = ephemeralCacheControl()
+	}
+	if mode == anthropicCacheAuto {
+		body.CacheControl = ephemeralCacheControl()
+		return
+	}
+	// No automatic breakpoint available: pin the tail ourselves so the growing
+	// conversation is still written and read across turns.
+	for i := len(body.Messages) - 1; i >= 0; i-- {
+		if markLastCacheableBlock(body.Messages[i].Content) {
+			return
+		}
+	}
+}
+
+// markLastCacheableBlock marks the last block the API accepts a breakpoint on.
+// A thinking block cannot be marked; an empty text block and a tool_result
+// without content carry nothing worth caching.
+func markLastCacheableBlock(blocks []anthropicContentBlock) bool {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		b := &blocks[i]
+		switch b.Type {
+		case "thinking":
+			continue
+		case "text":
+			if b.Text == "" {
+				continue
+			}
+		case "tool_result":
+			if b.Content == nil {
+				continue
+			}
+		}
+		b.CacheControl = ephemeralCacheControl()
+		return true
+	}
+	return false
+}
+
+// cacheControlRejected reports whether a 400 blames the caching field.
+func cacheControlRejected(body []byte) bool {
+	msg := strings.ToLower(string(body))
+	return strings.Contains(msg, "cache_control") || strings.Contains(msg, "cache control")
+}
+
+// withoutCacheControl returns plan without a cache_control entry, so the retry
+// after a refusal also drops one the user set through extra_body.
+func withoutCacheControl(plan reasoning.Plan) reasoning.Plan {
+	if _, ok := plan.Set["cache_control"]; !ok {
+		return plan
+	}
+	out := reasoning.Plan{Omit: plan.Omit, Warnings: plan.Warnings, Set: make(map[string]any, len(plan.Set))}
+	for k, v := range plan.Set {
+		if k != "cache_control" {
+			out.Set[k] = v
+		}
+	}
+	return out
 }
 
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	System      string             `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice  map[string]string  `json:"tool_choice,omitempty"`
-	Stream      bool               `json:"stream"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature,omitempty"`
+	Model string `json:"model"`
+	// System is a list of blocks so the last one can carry a cache breakpoint;
+	// a plain string could not be marked and would be rewritten every turn.
+	System      []anthropicContentBlock `json:"system,omitempty"`
+	Messages    []anthropicMessage      `json:"messages"`
+	Tools       []anthropicTool         `json:"tools,omitempty"`
+	ToolChoice  map[string]string       `json:"tool_choice,omitempty"`
+	Stream      bool                    `json:"stream"`
+	MaxTokens   int                     `json:"max_tokens"`
+	Temperature float64                 `json:"temperature,omitempty"`
+	// CacheControl asks for automatic prompt caching. Rebuilt per request
+	// (see setAnthropicCache) and nil while the level is degraded.
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicStreamEvent struct {
@@ -165,13 +324,29 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []types.Mes
 	// reject the whole request with a 400.
 	reqBody.MaxTokens = anthropicMaxTokens(reqBody.MaxTokens, plan)
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling request: %w", err)
-	}
-	jsonData, err = applyReasoningPlan(jsonData, plan)
-	if err != nil {
-		return nil, fmt.Errorf("error applying reasoning plan: %w", err)
+	cacheMode := anthropicCacheMode()
+	// buildBody marshals the typed request (honouring the cache_control decision
+	// currently on reqBody) and merges the reasoning plan on top, since the plan
+	// addresses fields the struct does not carry.
+	buildBody := func() ([]byte, error) {
+		// Breakpoints are placed here, not before the loop, so a retry at a
+		// lower cache level rebuilds the body from the current level.
+		setAnthropicCache(&reqBody, cacheMode)
+		data, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling request: %w", err)
+		}
+		bodyPlan := plan
+		// Without the top-level field, a cache_control the user set through
+		// extra_body would still break an endpoint that refused it.
+		if cacheMode != anthropicCacheAuto {
+			bodyPlan = withoutCacheControl(plan)
+		}
+		data, err = applyReasoningPlan(data, bodyPlan)
+		if err != nil {
+			return nil, fmt.Errorf("error applying reasoning plan: %w", err)
+		}
+		return data, nil
 	}
 
 	url := strings.TrimRight(p.BaseURL, "/") + "/messages"
@@ -179,23 +354,53 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, messages []types.Mes
 	defer stream.close()
 	httpCtx := stream.ctx
 
-	req, err := http.NewRequestWithContext(httpCtx, http.MethodPost, url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("anthropic-version", anthropicVersion)
-	if p.APIKey != "" {
-		req.Header.Set("x-api-key", p.APIKey)
+	post := func(data []byte) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(httpCtx, http.MethodPost, url, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("anthropic-version", anthropicVersion)
+		if p.APIKey != "" {
+			req.Header.Set("x-api-key", p.APIKey)
+		}
+		return doWithRetry(httpCtx, nil, req, sink)
 	}
 
-	resp, err := doWithRetry(httpCtx, nil, req, sink)
+	jsonData, err := buildBody()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := post(jsonData)
 	if err != nil {
 		if ctx.Err() != nil {
 			return &types.StreamResult{Interrupted: true}, nil
 		}
 		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+
+	// An Anthropic-compatible gateway with an older schema may refuse the
+	// caching field. Losing the whole turn over it is not acceptable, so each
+	// refusal steps one level down for the rest of the process and the request
+	// is rebuilt and retried, at most down to anthropicCacheNone.
+	for resp.StatusCode == http.StatusBadRequest && cacheMode != anthropicCacheNone {
+		rejected, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !cacheControlRejected(rejected) {
+			return nil, fmt.Errorf("Anthropic API error (%d): %s", resp.StatusCode, string(rejected))
+		}
+		cacheMode = degradeAnthropicCache(cacheMode)
+		if jsonData, err = buildBody(); err != nil {
+			return nil, err
+		}
+		resp, err = post(jsonData)
+		if err != nil {
+			if ctx.Err() != nil {
+				return &types.StreamResult{Interrupted: true}, nil
+			}
+			return nil, fmt.Errorf("error sending request: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 
@@ -241,8 +446,8 @@ func anthropicPlanBudget(plan reasoning.Plan) int {
 	return 0
 }
 
-func convertMessagesToAnthropic(messages []types.Message) (string, []anthropicMessage) {
-	var systemParts []string
+func convertMessagesToAnthropic(messages []types.Message) ([]anthropicContentBlock, []anthropicMessage) {
+	var systemParts []anthropicContentBlock
 	var result []anthropicMessage
 	// lastWasToolResult tracks whether the most recently appended message is a
 	// user message holding only tool_result blocks. Consecutive "tool" messages
@@ -255,7 +460,7 @@ func convertMessagesToAnthropic(messages []types.Message) (string, []anthropicMe
 		switch msg.Role {
 		case "system":
 			if msg.Content != "" {
-				systemParts = append(systemParts, msg.Content)
+				systemParts = append(systemParts, anthropicContentBlock{Type: "text", Text: msg.Content})
 			}
 		case "user":
 			lastWasToolResult = false
@@ -332,7 +537,7 @@ func convertMessagesToAnthropic(messages []types.Message) (string, []anthropicMe
 		}
 	}
 
-	return strings.Join(systemParts, "\n\n"), result
+	return systemParts, result
 }
 
 func convertToolsToAnthropic(tools []types.Tool) []anthropicTool {
@@ -446,6 +651,9 @@ loop:
 				if event.Message.Usage.CacheReadInputTokens > 0 {
 					result.CachedTokens = event.Message.Usage.CacheReadInputTokens
 				}
+				if event.Message.Usage.CacheCreationInputTokens > 0 {
+					result.CacheWriteTokens = event.Message.Usage.CacheCreationInputTokens
+				}
 			case "content_block_start":
 				if event.ContentBlock.Type == "tool_use" {
 					toolCalls[event.Index] = &types.ToolCall{
@@ -499,6 +707,9 @@ loop:
 				}
 				if event.Usage.CacheReadInputTokens > 0 {
 					result.CachedTokens = event.Usage.CacheReadInputTokens
+				}
+				if event.Usage.CacheCreationInputTokens > 0 {
+					result.CacheWriteTokens = event.Usage.CacheCreationInputTokens
 				}
 			case "error":
 				return nil, fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)

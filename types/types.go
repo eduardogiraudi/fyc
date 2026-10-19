@@ -166,6 +166,9 @@ type StreamResult struct {
 	CompletionTokens   int
 	FinishReason       string
 	CachedTokens       int
+	// CacheWriteTokens is the number of prompt tokens written to a provider-side
+	// prompt cache by this request (Anthropic cache_creation_input_tokens).
+	CacheWriteTokens int
 	// Interrupted is true if generation was interrupted via context cancel
 	Interrupted bool
 }

@@ -499,9 +499,16 @@ func tokenStatsLine(result *types.StreamResult, s *ChatSession) string {
 	}
 	cacheInfo := ""
 	if result.CachedTokens > 0 {
-		cacheInfo = fmt.Sprintf(" %s %s %s",
+		cacheInfo += fmt.Sprintf(" %s %s %s",
 			ui.InfoStyle.Render("| cache hit:"),
 			ui.OkStyle.Render(fmt.Sprintf("%d", result.CachedTokens)),
+			ui.InfoStyle.Render("tokens"),
+		)
+	}
+	if result.CacheWriteTokens > 0 {
+		cacheInfo += fmt.Sprintf(" %s %s %s",
+			ui.InfoStyle.Render("| cache write:"),
+			ui.OkStyle.Render(fmt.Sprintf("%d", result.CacheWriteTokens)),
 			ui.InfoStyle.Render("tokens"),
 		)
 	}

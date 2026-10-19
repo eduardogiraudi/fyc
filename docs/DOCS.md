@@ -7,7 +7,7 @@ The Go module and default binary name are both `fuckyourcli`; application-owned 
 ## Contents
 
 - Setup: [Requirements](#requirements) · [Build](#build) · [Install](#install) · [Configuration](#configuration) · [OpenAI Codex (OAuth)](#openai-codex-oauth)
-- Using it: [Usage](#usage) · [Reasoning / thinking](#reasoning--thinking) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
+- Using it: [Usage](#usage) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
 - Customisation: [Tool hooks](#tool-hooks-prepost) · [Status bar hook](#status-bar-hook) · [System prompt](#system-prompt-persona) · [Project instructions (AGENTS.md)](#project-instructions-agentsmd)
 - Tools & integrations: [Built-in tools](#built-in-tools) · [LSP servers](#lsp-servers) · [Git tools](#git-tools) · [MCP servers](#mcp-servers) · [AG-UI backend](#ag-ui-backend)
 - Internals: [Runtime files](#runtime-files) · [Architecture](#architecture) · [Security model](#security-model) ([Windows sandbox](#windows-sandbox)) · [Development](#development)
@@ -328,6 +328,15 @@ Inside the chat:
 
 - A **local host** (`localhost`, `127.0.0.1`, …) is treated as a tolerant local inference server: it selects the *Local* profile even when the model name matches a known family (e.g. Ollama serving `qwen3:8b`), so the request sends `reasoning_effort` / `reasoning.effort` instead of a vendor-specific field the endpoint may ignore, and never asks for `reasoning.encrypted_content`.
 - When a local endpoint sits in front of a proxy (LiteLLM, a gateway) that expects the *upstream* vendor's fields, the automatic choice is not enough: declare the placement per provider from `/reasoning → Advanced → Wire fields`. That override wins over both the built-in table and the catalog.
+
+## Prompt caching
+
+Anthropic requests ask for prompt caching in **two layers**. The **static prefix** — tool schemas and system prompt — is pinned with explicit `cache_control` breakpoints on the last tool and on the last system block, so it stays cached even when the tail diverges (a pruned screenshot image, a mode switch, compaction). The **growing conversation** is left to the server: a top-level `cache_control` enables automatic caching, where the API places the breakpoint on the last cacheable block and moves it forward as the conversation grows. Either way the marked prefix is written once and read at a fraction of the input price (and with less prefill latency) on every later turn.
+
+- **Always on, no configuration.** Every Anthropic provider gets the breakpoints, custom `base_url` included. The request carries at most three of the API's four allowed breakpoints (last tool, last system block, automatic tail), and the `system` prompt is sent as a block list with one block per system message so its tail can be marked. A thinking block, an empty text block and a `tool_result` with no content are never marked. The breakpoint only pays off above the model's minimum cacheable length (1024 tokens on most current models, 4096 on Haiku 4.5); below it the request simply stays uncached, with no error.
+- **Graceful three-level fallback.** An Anthropic-compatible endpoint with an older schema may refuse the field. Each refusal is remembered for the rest of the process and steps the request down one level: automatic + static breakpoints → explicit breakpoints only (the conversation tail is pinned explicitly instead, for a gateway with no top-level field) → no `cache_control` at all. The body is rebuilt and retried at each step, and any `cache_control` typed through `/reasoning → Advanced → Extra body` is dropped too, so a refusal never costs the turn. A refusal that does not name the field is reported as a normal API error. `FYC_ANTHROPIC_NO_CACHE=1` opts out up front.
+- **Visible in the stats.** The token line shows `cache hit:` (input tokens read from the cache) and `cache write:` (tokens written by this request); conversation logs record the write count as `cache_write_tokens`.
+- Compaction rewrites the history, which invalidates the cached conversation prefix; the next turn writes it again.
 
 ## Auto-compaction
 

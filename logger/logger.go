@@ -98,6 +98,7 @@ type Event struct {
 	PromptTokens     int    `json:"prompt_tokens,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"`
 	CachedTokens     int    `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int    `json:"cache_write_tokens,omitempty"`
 	ToolCalls        int    `json:"tool_calls,omitempty"`
 	FinishReason     string `json:"finish_reason,omitempty"`
 	Interrupted      bool   `json:"interrupted,omitempty"`
@@ -232,6 +233,7 @@ func (r *request) finish(ctx context.Context, result *types.StreamResult, callEr
 	e := Event{Type: "request_finished", DurationMS: time.Since(r.start).Milliseconds()}
 	if result != nil {
 		e.PromptTokens, e.CompletionTokens, e.CachedTokens = result.PromptTokens, result.CompletionTokens, result.CachedTokens
+		e.CacheWriteTokens = result.CacheWriteTokens
 		e.ToolCalls, e.FinishReason, e.Interrupted = len(result.ToolCalls), result.FinishReason, result.Interrupted
 	}
 	if callErr != nil {
