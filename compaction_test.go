@@ -137,6 +137,9 @@ func TestTurnCompactionRetainsRequestInstructionsAndCompleteBatch(t *testing.T) 
 func TestTurnCompactionSummarizesOversizedActiveBatchWhole(t *testing.T) {
 	compactionTestConfig(t, true, true, 1000)
 	history := turnCompactionHistory()
+	// Distinct targets: identical calls are deduplicated in the transcript and
+	// this test is about the oversized batch being summarized as a whole.
+	history[4].ToolCalls[1].Function.Arguments = map[string]interface{}{"path": "sub"}
 	history[5].Content = strings.Repeat("huge output ", 1000)
 	s := &ChatSession{ChatHistory: history}
 	_, _, err := compactContextWith(context.Background(), s, true, 1000, func(_ context.Context, messages []types.Message, _ *ChatSession) (string, error) {

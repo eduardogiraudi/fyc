@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"fuckyourcli/config"
@@ -116,6 +117,106 @@ func isModeInstruction(m types.Message) bool {
 	return m.Role == "user" && strings.HasPrefix(m.Content, "[INSTRUCTIONS]: ")
 }
 
+// Superseded results are pruned only in the compaction transcript: the
+// summarizer pays for every duplicate it reads and the summary replaces all of
+// them right after, so a duplicate is worth nothing there and nothing is lost
+// that compaction was not already discarding. Only read-only tools that return
+// a snapshot of a target are eligible — a mutating tool's result is an outcome,
+// not a snapshot, and the live history is never pruned this way.
+const minElidedResultTokens = 256
+
+var snapshotTools = map[string]bool{
+	"read": true, "get_anchors": true, "ls": true, "grep": true, "context_snapshot": true,
+}
+
+// elisionKey names the target of a snapshot call. Only the last result of a key
+// is informative: an earlier one describes a state the transcript replaced.
+func elisionKey(call types.ToolCall) (key, target string, ok bool) {
+	if !snapshotTools[call.Function.Name] {
+		return "", "", false
+	}
+	args := make(map[string]interface{}, len(call.Function.Arguments))
+	for k, v := range call.Function.Arguments {
+		args[k] = v
+	}
+	// The model spells the same target both "./a.go" and "a.go".
+	if p, isPath := args["path"].(string); isPath && p != "" {
+		args["path"] = filepath.Clean(p)
+	}
+	canonical, err := json.Marshal(args)
+	if err != nil {
+		return "", "", false
+	}
+	return call.Function.Name + " " + string(canonical), elisionTarget(args), true
+}
+
+// elisionTarget renders the argument worth naming in the note.
+func elisionTarget(args map[string]interface{}) string {
+	if p, ok := args["path"].(string); ok && p != "" && p != "." {
+		return p
+	}
+	if pattern, ok := args["pattern"].(string); ok && pattern != "" {
+		return "pattern " + pattern
+	}
+	return "the workspace"
+}
+
+func supersededNote(tool, target string) string {
+	return "[omitted from this transcript: the content of an earlier " + tool + " of " + target +
+		"; the same target was read again later and that result is still here]"
+}
+
+// pruneSupersededToolResults returns a copy of history with every eligible
+// result that a later call superseded replaced by a one-line note. Role, name
+// and tool_call_id are preserved: a result must stay paired with its call.
+func pruneSupersededToolResults(history []types.Message) []types.Message {
+	type candidate struct {
+		key, tool, target string
+		index             int
+	}
+	lastSeen := make(map[string]int)
+	var candidates []candidate
+	for i := 0; i < len(history); {
+		calls := history[i].ToolCalls
+		if history[i].Role != "assistant" || len(calls) == 0 {
+			i++
+			continue
+		}
+		i++
+		for _, call := range calls {
+			if i >= len(history) {
+				break
+			}
+			if key, target, ok := elisionKey(call); ok {
+				lastSeen[key] = i
+				candidates = append(candidates, candidate{key: key, tool: call.Function.Name, target: target, index: i})
+			}
+			i++
+		}
+	}
+	var out []types.Message
+	for _, c := range candidates {
+		if c.index == lastSeen[c.key] {
+			continue
+		}
+		msg := &history[c.index]
+		// An error is evidence of what was tried, and a short result costs less
+		// than the note that would replace it.
+		if len(msg.Images) > 0 || types.ToolResultFailed(msg.Content) || estimateTokens(msg.Content) < minElidedResultTokens {
+			continue
+		}
+		if out == nil {
+			out = make([]types.Message, len(history))
+			copy(out, history)
+		}
+		out[c.index].Content = supersededNote(c.tool, c.target)
+	}
+	if out == nil {
+		return history
+	}
+	return out
+}
+
 func planTurnCompaction(s *ChatSession, threshold int) (compactionPlan, error) {
 	var plan compactionPlan
 	var body []types.Message
@@ -203,7 +304,8 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 	}
 	// Serialize as data rather than replaying live tool calls without schemas
 	// or letting historical mode/user instructions override the compactor.
-	transcript, err := json.Marshal(pruneScreenshotImages(plan.older, 0))
+	// Superseded snapshot results are replaced by a note here and only here.
+	transcript, err := json.Marshal(pruneSupersededToolResults(pruneScreenshotImages(plan.older, 0)))
 	if err != nil {
 		return before, before, err
 	}
