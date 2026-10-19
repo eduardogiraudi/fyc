@@ -278,6 +278,9 @@ func buildSystemPrompt(today, userPreferences string, s *ChatSession) string {
 	if s.toolVisible("ls") || s.toolVisible("read") || s.toolVisible("grep") || s.toolVisible("context_snapshot") {
 		rules = append(rules, "Verify before acting: never assume file contents or structure. Use ls, read, grep, or context_snapshot first.")
 	}
+	if s.toolVisible("read") || s.toolVisible("grep") || s.toolVisible("get_anchors") {
+		rules = append(rules, "Truncated answers: read/grep/get_anchors results may begin with a note like \"[read: lines 1-2000 of 51234 …]\" or \"[grep: showing 200 of 1832 matches …]\". That is a cut, not the whole result — continue with offset/limit or refine pattern/include_glob. Never report the missing part as absent or empty.")
+	}
 	if s.toolVisible("get_anchors") && s.toolVisible("replace_anchors") {
 		rules = append(rules, `Editing existing files:
   1. get_anchors → reads file with anchor-annotated lines (Word:hash§content, § = display separator, not part of the anchor)

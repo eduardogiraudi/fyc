@@ -55,12 +55,15 @@ func executeLSTool(args map[string]any, restrictedRoot string, globalIgnore *Ign
 	return strings.Join(out, "\n")
 }
 
-// executeReadTool handles the "read" case.
+// executeReadTool handles the "read" case. The answer is windowed (offset/limit
+// lines, readMaxLines/readMaxBytes) so a single call cannot swamp the context;
+// any cut is announced at the top of the payload.
 func executeReadTool(args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
 	path, ok := args["path"].(string)
 	if !ok {
 		return "error: path argument required"
 	}
+	offset, limit := optionalNumberArg(args, "offset"), optionalNumberArg(args, "limit")
 
 	root, err := getRoot(restrictedRoot)
 	if err != nil {
@@ -83,7 +86,7 @@ func executeReadTool(args map[string]any, restrictedRoot string, globalIgnore *I
 	if err != nil {
 		return err.Error()
 	}
-	return string(data)
+	return windowToolOutput(string(data), offset, limit, "read", "")
 }
 
 // executeWriteTool handles the "write" case.
@@ -419,19 +422,43 @@ func executeGrepTool(args map[string]any, restrictedRoot string, globalIgnore *I
 		return "no matches found"
 	}
 
+	// Cap the answer: a broad pattern on a large tree would otherwise fill the
+	// context with matches the model never reads. The cut is announced up front.
+	maxMatches := grepHeadLimit(args)
 	var lines []string
+	size := 0
 	for _, m := range matches {
-		lines = append(lines, fmt.Sprintf("%s:%d: %s", m.Path, m.Line, m.Content))
+		if len(lines) >= maxMatches {
+			break
+		}
+		line := fmt.Sprintf("%s:%d: %s", m.Path, m.Line, m.Content)
+		if len(lines) > 0 && size+len(line)+1 > grepMaxBytes {
+			break
+		}
+		size += len(line) + 1
+		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	if len(lines) == len(matches) {
+		return strings.Join(lines, "\n")
+	}
+	note := fmt.Sprintf("grep: showing %d of %d matches (%s)", len(lines), len(matches), sizeLabel(size))
+	if len(lines) < maxMatches {
+		note += fmt.Sprintf(", byte budget reached at %s", sizeLabel(grepMaxBytes))
+	}
+	return leadingNote("%s — refine pattern/include_glob, or raise head_limit", note) +
+		strings.Join(lines, "\n")
 }
 
-// executeGetAnchorsTool handles the "get_anchors" case.
+// executeGetAnchorsTool handles the "get_anchors" case. The state always caches
+// the whole file, but the answer is windowed exactly like read: a long file would
+// otherwise blow the context in the very tool required before every edit. The
+// anchors already returned stay valid, so continuing with offset is safe.
 func executeGetAnchorsTool(args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
 	path, ok := args["path"].(string)
 	if !ok {
 		return "error: path argument required"
 	}
+	offset, limit := optionalNumberArg(args, "offset"), optionalNumberArg(args, "limit")
 	root, err := getRoot(restrictedRoot)
 	if err != nil {
 		return fmt.Errorf("error opening root: %w", err).Error()
@@ -453,7 +480,8 @@ func executeGetAnchorsTool(args map[string]any, restrictedRoot string, globalIgn
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}
-	return annotated
+	return windowToolOutput(annotated, offset, limit, "get_anchors",
+		" (anchors already shown stay valid)")
 }
 
 // executeReplaceAnchorsTool handles the "replace_anchors" case.

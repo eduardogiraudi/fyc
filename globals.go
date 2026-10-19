@@ -493,7 +493,7 @@ var availableTools = []types.Tool{
 		Type: "function",
 		Function: types.ToolFunction{
 			Name:        "grep",
-			Description: "Fast, sandboxed, parallel recursive grep. Uses ripgrep-like engine with automatic .gitignore/.fycignore support and os.Root sandboxing. Returns matching lines with line numbers.",
+			Description: "Fast, sandboxed, parallel recursive grep. Uses ripgrep-like engine with automatic .gitignore/.fycignore support and os.Root sandboxing. Returns matching lines with line numbers.\nThe output is capped (default 200 matches, 64 KiB): when a cut happens the first line states how many matches exist in total. Refine pattern/include_glob rather than raising head_limit.",
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
@@ -505,6 +505,7 @@ var availableTools = []types.Tool{
 					"include_binary":   {Type: "boolean", Description: "If true, also search binary files (default: false). By default files containing NUL bytes are skipped, like ripgrep."},
 					"max_file_size":    {Type: "number", Description: "Skip files larger than this many bytes (0 = no limit)"},
 					"workers":          {Type: "number", Description: "Number of parallel file workers (0 = auto = NumCPU)"},
+					"head_limit":       {Type: "number", Description: "Maximum matches to return (default 200, hard max 1000)"},
 				},
 				Required: []string{"pattern"},
 			},
@@ -530,11 +531,13 @@ var availableTools = []types.Tool{
 		Type: "function",
 		Function: types.ToolFunction{
 			Name:        "read",
-			Description: "Read-only file view. Do NOT use if you intend to edit — use get_anchors instead.",
+			Description: "Read-only file view. Do NOT use if you intend to edit — use get_anchors instead. The answer is windowed: at most 2000 lines / 100 KB per call, and a cut is announced on the first line with the total line count. Continue with offset (1-based first line) and limit (max lines).",
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
-					"path": {Type: "string"},
+					"path":   {Type: "string"},
+					"offset": {Type: "number", Description: "1-based first line to return (default 1)"},
+					"limit":  {Type: "number", Description: "Maximum lines to return (default and cap: 2000)"},
 				},
 				Required: []string{"path"},
 			},
@@ -558,11 +561,13 @@ var availableTools = []types.Tool{
 		Type: "function",
 		Function: types.ToolFunction{
 			Name:        "get_anchors",
-			Description: "Required first step before any edit. Reads a file with word-anchor prefixes \u2014 returns each line as 'WORD:hash\xa7content', e.g. 'Agate:a3\xa7package main'. Unchanged lines keep their anchors across get_anchors calls and successful edits. Any external change to the file makes a patch fail without writing; call get_anchors again and reconsider the patch using the current content. /clear invalidates all cached anchors. Always call this before replace_anchors.",
+			Description: "Required first step before any edit. Reads a file with word-anchor prefixes \u2014 returns each line as 'WORD:hash\xa7content', e.g. 'Agate:a3\xa7package main'. Unchanged lines keep their anchors across get_anchors calls and successful edits. Any external change to the file makes a patch fail without writing; call get_anchors again and reconsider the patch using the current content. /clear invalidates all cached anchors. Always call this before replace_anchors.\nThe whole file is always cached, but the answer is windowed (at most 2000 lines / 100 KB, announced on the first line): use offset/limit to read the rest, the anchors already returned stay valid.",
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
-					"path": {Type: "string"},
+					"path":   {Type: "string"},
+					"offset": {Type: "number", Description: "1-based first line to return (default 1)"},
+					"limit":  {Type: "number", Description: "Maximum lines to return (default and cap: 2000)"},
 				},
 				Required: []string{"path"},
 			},
