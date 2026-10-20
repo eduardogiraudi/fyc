@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,16 +51,41 @@ const (
 	rootLockRetryInterval = 25 * time.Millisecond
 )
 
-// Diagnostics must not wait indefinitely for another process's root lock.
-func lockRoot() (*store.FileLock, error) {
+var rootMu sync.Mutex
+
+type rootLock struct {
+	file *store.FileLock
+	once sync.Once
+	err  error
+}
+
+func (l *rootLock) Unlock() error {
+	if l == nil {
+		return nil
+	}
+	l.once.Do(func() {
+		l.err = l.file.Unlock()
+		rootMu.Unlock()
+	})
+	return l.err
+}
+
+// Queue local writers before starting the bounded inter-process wait.
+func lockRoot() (*rootLock, error) {
+	rootMu.Lock()
 	deadline := time.Now().Add(rootLockTimeout)
 	for {
 		lock, err := store.TryLock(filepath.Join(getLogDir(), ".lock"))
+		if err == nil {
+			return &rootLock{file: lock}, nil
+		}
 		if !errors.Is(err, store.ErrLocked) {
-			return lock, err
+			rootMu.Unlock()
+			return nil, err
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			rootMu.Unlock()
 			return nil, err
 		}
 		time.Sleep(min(rootLockRetryInterval, remaining))

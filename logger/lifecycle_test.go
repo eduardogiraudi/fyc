@@ -237,7 +237,7 @@ func TestRootLockRetriesUntilReleased(t *testing.T) {
 		}
 		defer held.Unlock()
 		type outcome struct {
-			lock *store.FileLock
+			lock *rootLock
 			err  error
 		}
 		done := make(chan outcome, 1)
@@ -267,6 +267,46 @@ func TestRootLockRetriesUntilReleased(t *testing.T) {
 			t.Fatal("root lock did not retry after release")
 		}
 	})
+}
+
+func TestRootLockLocalWaitDoesNotConsumeTimeout(t *testing.T) {
+	setupLogs(t)
+	held, err := lockRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Unlock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		lock, err := lockRoot()
+		if err == nil {
+			err = lock.Unlock()
+		}
+		done <- err
+	}()
+	<-started
+	// Local work may exceed the inter-process timeout on slow filesystems.
+	select {
+	case err := <-done:
+		t.Fatalf("root lock returned before local release: %v", err)
+	case <-time.After(rootLockTimeout + 100*time.Millisecond):
+	}
+	if err := held.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Unlock(); err != nil {
+		t.Fatalf("repeated unlock: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("local wait consumed root lock timeout: %v", err)
+		}
+	case <-time.After(rootLockTimeout + time.Second):
+		t.Fatal("root lock did not unblock after local release")
+	}
 }
 
 func TestRootLockDoesNotRetryIOErrors(t *testing.T) {
