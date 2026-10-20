@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-20
+
+### Added
+
+- compaction: add dedicated compaction model and configurable failure policy (`d9e2538`).
+
+### Fixed
+
+- logger: queue local root-lock waiters before the inter-process timeout (`097564a`).
+
 ## [1.1.1] - 2026-10-20
 
 ### Fixed
