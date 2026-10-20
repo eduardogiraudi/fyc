@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-10-20
+
+### Fixed
+
+- grep: searching a single file now looks only at that exact file instead of widening to its folder (`868de47`).
+
 ## [1.1.0] - 2026-10-19
 
 ### Added
