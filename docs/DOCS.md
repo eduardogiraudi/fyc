@@ -305,6 +305,7 @@ Inside the chat:
 | `Ctrl+O` | Toggle autonomous execution without typing a command. |
 | `/airplane [on\|off]` | Toggle `web_search` and web-dependent commands. Equivalent to disabling/enabling `web_search` in tool settings. |
 | `/clear` | Clear chat context while keeping system messages. |
+| `/retry` | Repeat the last failed provider request without rerunning completed tools. |
 | `/delay <seconds>` | Persistently set delay before model requests. |
 | `/temp [value]` | Show or set global temperature. |
 | `/reasoning` | Auto wizard for thinking/reasoning: it resolves the active model's profile and lists only what that model can express — Default, Off, Adaptive (when supported) and one row per graded level (Minimal → Max), each showing the concrete request fields it sends. Custom effort, `extra_body` and the per-provider wire fields live under **Advanced**. Warns when the model is not recognised (the default sends nothing). |
@@ -323,6 +324,16 @@ Inside the chat:
 | `/deep ...` | One-shot deep research mode. Hidden/disabled when `web_search` is disabled, including when no supported browser is installed. |
 | `/tutorial <question>` | Answer a question about using fyc with embedded documentation and no agent tools. Use `/mode tutorial` for a persistent tutorial conversation. |
 | `exit` or `/exit` | Exit and save chat history. |
+
+## Manual retry
+
+After a provider error, `/retry` starts a fresh request from the last sampling boundary, not from the start of the user turn or the last streamed event. The original user prompt and all completed tool calls/results remain in context; `/retry` is not sent as a new user message. Tools already executed are not replayed, but the model can request new tools after the retry succeeds.
+
+A timeout during streaming regenerates that provider response from scratch. Partial text already displayed stays visible but is not added to the model history; partial tool calls are never executed. This is an explicit user retry, not an automatic replay of a partially consumed stream.
+
+Manual retry is available for any provider error, including endpoints that report rate limiting as HTTP 400. It uses the currently selected provider/model and settings, so you can adjust `/model`, `/provider` or `/reasoning` first. The failed turn's mode instructions and tool restrictions are retained, including when switching away from Gemini. Tool calls and results keep stable matching IDs even when Gemini did not supply them. The first retry request skips auto-compaction to preserve its sampling boundary; later tool batches follow the usual compaction policy. If a later batch triggers compaction, mode instructions remain present exactly once and persistent modes keep their injection state, so the next prompt does not add the same instructions again.
+
+The checkpoint is runtime-only: restarting fyc, clearing or switching chats, sending a new prompt, or rewriting the conversation (for example with `/compact`) makes it unavailable. A successful response or user cancellation is not retryable. If the retry fails again, `/retry` remains available.
 
 ## Reasoning / thinking
 

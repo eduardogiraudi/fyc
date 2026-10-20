@@ -149,6 +149,15 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		return true, ""
 	}
 
+	if input == "/retry" || strings.HasPrefix(input, "/retry ") {
+		if strings.TrimSpace(strings.TrimPrefix(input, "/retry")) != "" {
+			sinkLine(chatSink(s), ui.InfoStyle.Render("Usage: /retry"))
+		} else if retryFailedRequestWith(s, func(s *ChatSession) { streamChatWithRetry(s, true) }) {
+			s.autosave()
+		}
+		return true, ""
+	}
+
 	// Handle /clear command
 	if input == "/clear" || strings.HasPrefix(input, "/clear ") {
 		var filtered []types.Message
@@ -158,6 +167,7 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			}
 		}
 		s.ChatHistory = filtered
+		s.retryRequest = nil
 		tools.ResetAnchorState()
 		// The cleared context no longer carries the persistent mode's
 		// instructions, and /clear returns to plain chat: drop both so the mode

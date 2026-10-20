@@ -92,6 +92,7 @@ Handy commands inside the chat:
 | `/plan`, `/debug`, `/deep` | One-shot planning, debugging and deep-research modes. |
 | `/tutorial <question>` | Answer a question about using fyc from its embedded documentation and no agent tools; use `/mode tutorial` for follow-ups. |
 | `/compact` | Summarize the conversation to free up context. |
+| `/retry` | Repeat the failed provider request without rerunning completed tools. |
 
 See the [full command list](docs/DOCS.md#usage) for the rest.
 

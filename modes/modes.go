@@ -86,6 +86,7 @@ func GetCommands(webSearchEnabled ...bool) []Command {
 		{Name: "/airplane", Description: "Toggle web_search and web-dependent commands"},
 		{Name: "/clear", Description: "Clear chat context (keeps system messages)"},
 		{Name: "/compact", Description: "Compact chat context into a structured summary"},
+		{Name: "/retry", Description: "Repeat the failed provider request without rerunning completed tools"},
 		{Name: "/delay", Description: "Set delay between AI responses (e.g., /delay 1.5)"},
 		{Name: "/temp", Description: "Set temperature for AI responses (e.g., /temp 0.8)"},
 		{Name: "/reasoning", Description: "Manage thinking/reasoning for the active model (interactive)"},

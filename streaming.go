@@ -16,25 +16,25 @@ import (
 type streamOptions struct {
 	includeReasoningSignature bool
 	includeToolCallID         bool
+	retryFirstRequest         bool
 }
 
 // streamChat dispatches to the correct provider's streaming function.
 func streamChat(s *ChatSession) {
+	streamChatWithRetry(s, false)
+}
+
+func streamChatWithRetry(s *ChatSession, retry bool) {
 	cfg := config.Get()
+	opts := streamOptions{retryFirstRequest: retry, includeToolCallID: true}
 	switch cfg.Provider {
 	case config.ProviderGemini:
-		// Gemini 3 attaches a thoughtSignature to keep reasoning state across
-		// turns; it must be carried in history or the model can 400 on tool calls.
-		streamProviderChat(s, streamOptions{includeReasoningSignature: true, includeToolCallID: false})
-	case config.ProviderOpenAICompatible:
-		streamProviderChat(s, streamOptions{includeReasoningSignature: false, includeToolCallID: true})
-	case config.ProviderOpenAIResponsesCompatible:
-		streamProviderChat(s, streamOptions{includeReasoningSignature: false, includeToolCallID: true})
+		// Gemini requires thought signatures when replaying tool calls.
+		opts.includeReasoningSignature = true
 	case config.ProviderAnthropic:
-		streamProviderChat(s, streamOptions{includeReasoningSignature: true, includeToolCallID: true})
-	case config.ProviderCodex:
-		streamProviderChat(s, streamOptions{includeReasoningSignature: false, includeToolCallID: true})
+		opts.includeReasoningSignature = true
 	}
+	streamProviderChat(s, opts)
 }
 
 // streamProviderChat is the single, shared streaming/tool loop used by every provider.
@@ -54,6 +54,11 @@ func streamProviderChat(s *ChatSession, opts streamOptions) {
 func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, provider types.Provider, respond compactionResponder) {
 	provider = providers.WithLogging(provider)
 	sink := chatSink(s)
+	instruction := ""
+	if opts.retryFirstRequest && s.retryRequest != nil {
+		instruction = s.retryRequest.instruction
+	}
+	s.retryRequest = nil
 	var lastResult *types.StreamResult
 	// A single cancellable context spans the whole turn — the provider call and
 	// the tool calls it produces — so ctrl+c in the TUI (or a client disconnect
@@ -70,7 +75,8 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 		}
 		// This boundary is reached only before sampling or after a complete
 		// tool batch; interrupted AG-UI calls exit below without reaching it.
-		if (firstRequest || cfg.CompactionMidTurn) && attempts < maxCompactionsPerTurn {
+		retrying := firstRequest && opts.retryFirstRequest
+		if !retrying && (firstRequest || cfg.CompactionMidTurn) && attempts < maxCompactionsPerTurn {
 			if maybeAutoCompactWith(ctx, s, sink, cfg.CompactionMidTurn, respond) {
 				attempts++
 			}
@@ -79,7 +85,14 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 		if ctx.Err() != nil {
 			return
 		}
-		restoreModeInstructions(s, cfg.Provider)
+		// Mid-turn compaction may have moved transport-only instructions into
+		// history. From this boundary onward, let history carry them alone.
+		if instruction != "" && cfg.Provider != config.ProviderGemini && historyHasModeInstructions(s.ChatHistory, instruction) {
+			instruction = ""
+		}
+		if !retrying && instruction == "" {
+			restoreModeInstructions(s, cfg.Provider)
+		}
 		applyDelay()
 		if ctx.Err() != nil {
 			return
@@ -88,10 +101,33 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 
 		// Bound context growth: only the most recent screenshots stay attached.
 		messages := pruneScreenshotImages(s.ChatHistory, maxKeptScreenshots)
+		if instruction != "" && cfg.Provider != config.ProviderGemini {
+			// Transport-only instructions must not split a completed tool batch
+			// or change the conversation guarded by the retry fingerprint.
+			modeMessage := types.Message{Role: "system", Content: instruction}
+			if len(messages) > 0 && messages[0].Role == "system" {
+				messages[0].Content += "\n\n" + instruction
+			} else {
+				messages = append([]types.Message{modeMessage}, messages...)
+			}
+		}
 		result, err := provider.StreamChat(ctx, messages, s.getToolsForAI(), sink)
 
+		if err == nil && result == nil {
+			err = fmt.Errorf("provider returned no response")
+		}
 		if err != nil {
 			sinkError(sink, err)
+			if ctx.Err() == nil {
+				if checkpoint := newRetryRequest(s); checkpoint != nil {
+					checkpoint.instruction = instruction
+					if cfg.Provider == config.ProviderGemini && checkpoint.mode != nil {
+						checkpoint.instruction = "[INSTRUCTIONS]: " + checkpoint.mode.GetInstructions(s.subagentsEnabled())
+					}
+					s.retryRequest = checkpoint
+					sinkLine(sink, ui.TipStyle.Render("Use /retry to repeat the failed provider request; completed tools will not be rerun."))
+				}
+			}
 			return
 		}
 
@@ -208,6 +244,15 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 	structured, hasStructured := sink.(types.ToolEventSink)
 	runCtx := s.runContext()
 
+	// Persist IDs for the entire batch before execution, including calls that
+	// may be interrupted or aborted. Gemini ignores these IDs on the wire.
+	for i := range toolCalls {
+		if toolCalls[i].ID == "" {
+			toolCalls[i].ID = agui.NewID("call")
+			assignToolCallID(s, i, toolCalls[i].ID)
+		}
+	}
+
 	for i, tc := range toolCalls {
 		if i > 0 {
 			sinkBlankLine(sink)
@@ -216,15 +261,7 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 		lbl := tools.DescribeTool(tc.Function.Name, tc.Function.Arguments)
 		spinnerLabel := strings.TrimSuffix(lbl.Present, "...")
 
-		// AG-UI requires a stable toolCallId; some providers (e.g. Gemini in
-		// certain paths) do not populate ToolCall.ID, so generate a synthetic one.
-		// It is kept in the history as well: a resumed run replays the call and
-		// must use the very same id, because the interrupt is bound to it.
 		callID := tc.ID
-		if hasStructured && callID == "" {
-			callID = agui.NewID("call")
-			assignToolCallID(s, i, callID)
-		}
 		if hasStructured && announce {
 			structured.ToolCallStarted(callID, tc.Function.Name, tc.Function.Arguments)
 		}
@@ -272,9 +309,7 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 		if len(res.Images) > 0 {
 			msg.Images = res.Images
 		}
-		if includeToolCallID {
-			msg.ToolCallID = tc.ID
-		}
+		msg.ToolCallID = tc.ID
 		s.ChatHistory = append(s.ChatHistory, msg)
 
 		if runCtx.Err() != nil {
@@ -287,9 +322,7 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 					Name:    rest.Function.Name,
 					Content: errToolAborted,
 				}
-				if includeToolCallID {
-					aborted.ToolCallID = rest.ID
-				}
+				aborted.ToolCallID = rest.ID
 				s.ChatHistory = append(s.ChatHistory, aborted)
 			}
 			return
@@ -436,6 +469,15 @@ func entryModel(ap *config.OpenAICompatibleProviderConfig, choice config.Compact
 	return choice.Model
 }
 
+func historyHasModeInstructions(history []types.Message, instruction string) bool {
+	for _, message := range history {
+		if message.Role == "user" && message.Content == instruction {
+			return true
+		}
+	}
+	return false
+}
+
 // restoreModeInstructions repairs legacy pre-turn compaction before sampling,
 // not on the next user input. In-turn compaction already retained the block.
 func restoreModeInstructions(s *ChatSession, provider config.ProviderType) {
@@ -444,10 +486,8 @@ func restoreModeInstructions(s *ChatSession, provider config.ProviderType) {
 		return
 	}
 	instruction := "[INSTRUCTIONS]: " + active.GetInstructions(s.subagentsEnabled())
-	for _, m := range s.ChatHistory {
-		if m.Role == "user" && m.Content == instruction {
-			return
-		}
+	if historyHasModeInstructions(s.ChatHistory, instruction) {
+		return
 	}
 	if s.turnModeOverride == nil && !s.claimModeInstructions(active, false) {
 		return

@@ -240,6 +240,7 @@ func resumeSession(s *ChatSession, workspaceDir, id string) error {
 		msgs = append(msgs, m)
 	}
 	s.ChatHistory = msgs
+	s.retryRequest = nil
 	s.SessionID = sf.ID
 	s.SessionCreatedAt = sf.CreatedAt
 	s.SessionTitle = sessionTitle(msgs)

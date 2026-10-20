@@ -35,6 +35,8 @@ type ChatSession struct {
 
 	ChatHistory []types.Message
 	CurrentMode *modes.Mode
+	// retryRequest is a runtime-only checkpoint at a failed sampling boundary.
+	retryRequest *retryRequest
 	// turnModeOverride holds a one-shot prefix mode (e.g. "/debug ...") for the
 	// duration of a single turn. It is cleared once the turn ends, so the tool
 	// policy of a one-shot mode never leaks into the following turns.

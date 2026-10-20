@@ -54,6 +54,7 @@ func switchChatSession(s *ChatSession, id string) error {
 		msgs = append(msgs, m)
 	}
 	s.ChatHistory = msgs
+	s.retryRequest = nil
 	// The loaded conversation starts as plain chat: drop the runtime mode and
 	// its injection flag so nothing dangles.
 	s.persistentModeInjected = ""
@@ -80,6 +81,7 @@ func startNewChat(s *ChatSession) error {
 		}
 	}
 	s.ChatHistory = filtered
+	s.retryRequest = nil
 	// A new chat starts as plain chat: drop the runtime mode and its injection
 	// flag so nothing dangles.
 	s.persistentModeInjected = ""

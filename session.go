@@ -100,6 +100,7 @@ func (s *ChatSession) ProcessInput(input string) bool {
 		input = modifiedInput
 	}
 
+	s.retryRequest = nil
 	cfg := config.Get()
 	mode, content := modes.DetectMode(input)
 	activeMode := s.CurrentMode
@@ -167,10 +168,14 @@ func (s *ChatSession) ProcessInput(input string) bool {
 	}
 
 	// Autosave at the end of every turn: a crash never loses the work.
+	s.autosave()
+
+	return true
+}
+
+func (s *ChatSession) autosave() {
 	if err := saveChatSession(s); err != nil && s.Sink != nil {
 		s.Sink.WriteText(ui.InfoStyle.Render("Warning: could not save chat: " + err.Error()))
 		s.Sink.WriteNewline()
 	}
-
-	return true
 }
