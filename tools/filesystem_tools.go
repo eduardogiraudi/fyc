@@ -396,16 +396,20 @@ func executeGrepTool(args map[string]any, restrictedRoot string, globalIgnore *I
 	if err != nil {
 		return fmt.Sprintf("grep error: %v", err)
 	}
-	if fi, stErr := os.Stat(absRoot); stErr == nil && !fi.IsDir() {
-		if includeGlob == "" {
-			includeGlob = filepath.Base(absRoot)
-		}
+	fi, err := os.Stat(absRoot)
+	if err != nil {
+		return fmt.Sprintf("grep error: %v", err)
+	}
+	var file string
+	if !fi.IsDir() {
+		file = filepath.Base(absRoot)
 		absRoot = filepath.Dir(absRoot)
 	}
 
 	matches, err := GrepRun(GrepOptions{
 		Pattern:         pattern,
 		Root:            absRoot,
+		File:            file,
 		CaseInsensitive: caseInsensitive,
 		IncludeGlob:     includeGlob,
 		ExcludeGlob:     excludeGlob,

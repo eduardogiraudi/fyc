@@ -32,6 +32,10 @@ type GrepOptions struct {
 	// All file access is sandboxed to this directory via os.Root.
 	Root string
 
+	// File, if non-empty, restricts the search to this literal path relative to Root.
+	// Include/exclude globs still apply; no directory walk is performed.
+	File string
+
 	// Workers is the number of parallel file-reading goroutines.
 	// 0 means runtime.NumCPU().
 	Workers int
@@ -101,6 +105,29 @@ func GrepRun(opts GrepOptions) ([]GrepMatch, error) {
 	// pre-expand globs once so the walk closure does zero allocations per file
 	includeGlobs := expandGlobBraces(opts.IncludeGlob)
 	excludeGlobs := expandGlobBraces(opts.ExcludeGlob)
+
+	if opts.File != "" {
+		if ig.isIgnored(filepath.Join(opts.Root, opts.File), opts.Root) ||
+			!matchGlobs(includeGlobs, opts.File, opts.IncludeGlob == "") ||
+			(opts.ExcludeGlob != "" && matchGlobs(excludeGlobs, opts.File, false)) {
+			return nil, nil
+		}
+		info, err := root.Stat(opts.File)
+		if err != nil {
+			return nil, err
+		}
+		if opts.MaxFileSize > 0 && info.Size() > opts.MaxFileSize {
+			return nil, nil
+		}
+		matches, err := grepFile(root, opts.File, re, opts)
+		if opts.OnMatch != nil {
+			for _, m := range matches {
+				opts.OnMatch(m)
+			}
+			return nil, err
+		}
+		return matches, err
+	}
 
 	// channels
 	pathCh := make(chan string, opts.Workers*32)
