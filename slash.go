@@ -178,17 +178,20 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			return true, ""
 		}
 		originalCount := len(s.ChatHistory)
-		before, after, err := compactContext(s, s.Sink)
+		before, after, res, err := compactContext(s, s.Sink)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				sinkLine(s.Sink, ui.InfoStyle.Render("Compaction interrupted."))
 			} else {
-				sinkLine(s.Sink, ui.ErrorStyle.Render("✗ Error during compaction: "+err.Error()))
+				sinkLine(s.Sink, ui.ErrorStyle.Render("✗ Error during compaction: "+err.Error()+"."+compactionFailureHint(config.Get(), false)))
 			}
 			return true, ""
 		}
 
-		sinkLine(s.Sink, ui.OkStyle.Render(fmt.Sprintf("✓ Context compacted. History reduced from %d to %d messages (~%d → ~%d tokens).", originalCount, len(s.ChatHistory), before, after)))
+		if res.FellBack {
+			sinkLine(s.Sink, ui.TipStyle.Render(compactionFallbackNotice(res)))
+		}
+		sinkLine(s.Sink, ui.OkStyle.Render(fmt.Sprintf("✓ Context compacted. History reduced from %d to %d messages (~%d → ~%d tokens, compactor: %s).", originalCount, len(s.ChatHistory), before, after, res.Model)))
 		return true, ""
 	}
 

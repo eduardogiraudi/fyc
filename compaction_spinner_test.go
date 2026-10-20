@@ -134,22 +134,22 @@ func TestAutoCompactionSpinnerLifecycle(t *testing.T) {
 				sink := &compactionSpinnerSink{}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				attempted := maybeAutoCompactWith(ctx, s, sink, retainTurn, func(got context.Context, _ []types.Message, _ *ChatSession) (string, error) {
+				attempted := maybeAutoCompactWith(ctx, s, sink, retainTurn, func(got context.Context, _ []types.Message, _ *ChatSession) (compactionResult, error) {
 					if got != ctx || !sink.active || !reflect.DeepEqual(sink.events, []string{"start"}) {
 						t.Fatal("spinner must remain active throughout the summary request")
 					}
 					switch outcome {
 					case "empty":
-						return " ", nil
+						return compactionResult{Summary: " "}, nil
 					case "error":
-						return "", errors.New("provider failure")
+						return compactionResult{}, errors.New("provider failure")
 					case "insufficient":
-						return strings.Repeat("s", 4000), nil
+						return compactionResult{Summary: strings.Repeat("s", 4000)}, nil
 					case "cancel":
 						cancel()
-						return "partial", nil
+						return compactionResult{Summary: "partial"}, nil
 					default:
-						return "hidden handoff summary", nil
+						return compactionResult{Summary: "hidden handoff summary"}, nil
 					}
 				})
 				if !attempted {
@@ -198,9 +198,9 @@ func TestCompactionSpinnerNoopsStayQuiet(t *testing.T) {
 			case "canceled":
 				cancel()
 			}
-			if maybeAutoCompactWith(ctx, s, sink, true, func(context.Context, []types.Message, *ChatSession) (string, error) {
+			if maybeAutoCompactWith(ctx, s, sink, true, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 				t.Fatal("no-op must not request a summary")
-				return "", nil
+				return compactionResult{}, nil
 			}) || len(sink.events) != 0 {
 				t.Fatalf("no-op emitted progress: %v", sink.events)
 			}

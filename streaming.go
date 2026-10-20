@@ -2,11 +2,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"fuckyourcli/agui"
 	"fuckyourcli/config"
-	"fuckyourcli/logger"
 	"fuckyourcli/providers"
 	"fuckyourcli/tools"
 	"fuckyourcli/types"
@@ -351,61 +349,74 @@ func findActiveProvider(list []config.OpenAICompatibleProviderConfig, activeName
 
 // buildProvider constructs the active provider based on the current configuration.
 func buildProvider(cfg config.Config, s *ChatSession) (providers.Provider, error) {
+	return newProvider(cfg, cfg.ActiveChoice(), s)
+}
+
+// newProvider builds a provider for a resolved choice: the live active one
+// (buildProvider), or the pinned model configured for compaction. Compaction
+// and streaming share this single construction path so a compactor cannot drift
+// from the credentials, base URL and reasoning rules of its provider entry.
+func newProvider(cfg config.Config, choice config.CompactorChoice, s *ChatSession) (providers.Provider, error) {
 	// The reasoning intent and, when the user declared one, the placement
-	// override for the active provider. Without an override the profile is
+	// override for this provider. Without an override the profile is
 	// auto-detected by the providers (built-in table + models.dev catalog).
+	// The compactor resolves its own key: inheriting the active provider's
+	// override would translate the thinking fields for the wrong model.
 	intent, override := config.ActiveReasoning()
-	switch cfg.Provider {
-	case config.ProviderGemini:
+	if !choice.Current {
+		intent, override = config.ReasoningForKey(choice.ReasoningKey())
+	}
+	switch choice.Kind {
+	case config.CompactorGemini:
 		if cfg.GeminiAPIKey == "" {
 			return nil, fmt.Errorf("Gemini API key not set")
 		}
-		p := providers.NewGeminiProvider(cfg.GeminiAPIKey, cfg.Model, cfg.Temperature)
+		p := providers.NewGeminiProvider(cfg.GeminiAPIKey, choice.Model, cfg.Temperature)
 		if s != nil && s.CurrentMode != nil {
 			p.SystemInstruction = s.CurrentMode.GetInstructions(s.subagentsEnabled())
 		}
 		p.SetReasoning(intent, override)
 		return p, nil
 
-	case config.ProviderOpenAICompatible:
-		ap := findActiveProvider(cfg.OpenAICompatibleProviders, cfg.ActiveProviderName, cfg.Model)
+	case config.CompactorOpenAI:
+		ap := findActiveProvider(cfg.OpenAICompatibleProviders, choice.Provider, choice.Model)
 		if ap == nil {
 			return nil, fmt.Errorf("OpenAI Compatible provider not found")
 		}
 		p := providers.NewOpenAICompatibleProvider(
-			ap.BaseURL, ap.APIKey, ap.Model, ap.Name,
-			cfg.Temperature, false, "",
+			ap.BaseURL, ap.APIKey, entryModel(ap, choice),
+			ap.Name, cfg.Temperature, false, "",
 		)
 		p.SetReasoning(intent, override)
 		return p, nil
 
-	case config.ProviderOpenAIResponsesCompatible:
-		ap := findActiveProvider(cfg.OpenAIResponsesCompatibleProviders, cfg.ActiveProviderName, cfg.Model)
+	case config.CompactorResponses:
+		ap := findActiveProvider(cfg.OpenAIResponsesCompatibleProviders, choice.Provider, choice.Model)
 		if ap == nil {
 			return nil, fmt.Errorf("OpenAI Responses API Compatible provider not found")
 		}
 		p := providers.NewOpenAIResponsesCompatibleProvider(
-			ap.BaseURL, ap.APIKey, ap.Model, ap.Name,
-			cfg.Temperature, false, "",
+			ap.BaseURL, ap.APIKey, entryModel(ap, choice),
+			ap.Name, cfg.Temperature, false, "",
 		)
 		p.SetReasoning(intent, override)
 		return p, nil
 
-	case config.ProviderAnthropic:
-		ap := findActiveProvider(cfg.AnthropicProviders, cfg.ActiveProviderName, cfg.Model)
+	case config.CompactorAnthropic:
+		ap := findActiveProvider(cfg.AnthropicProviders, choice.Provider, choice.Model)
 		if ap == nil {
 			return nil, fmt.Errorf("Anthropic provider not found")
 		}
-		p := providers.NewAnthropicProvider(ap.BaseURL, ap.APIKey, ap.Model, ap.Name, cfg.Temperature)
+		p := providers.NewAnthropicProvider(ap.BaseURL, ap.APIKey, entryModel(ap, choice), ap.Name, cfg.Temperature)
 		p.SetReasoning(intent, override)
 		return p, nil
 
-	case config.ProviderCodex:
+	case config.CompactorCodex:
 		token, err := config.CodexFreshAccessToken()
 		if err != nil {
 			return nil, err
 		}
-		p := providers.NewCodexProvider(token, cfg.Model, cfg.Temperature, false, "")
+		p := providers.NewCodexProvider(token, choice.Model, cfg.Temperature, false, "")
 		p.SetReasoning(intent, override)
 		p.Refresh = config.CodexForceRefresh
 		return p, nil
@@ -413,6 +424,16 @@ func buildProvider(cfg config.Config, s *ChatSession) (providers.Provider, error
 	default:
 		return nil, fmt.Errorf("unsupported provider")
 	}
+}
+
+// entryModel returns the model a request must carry: the active selection keeps
+// the entry's model (a /models switch rewrites it), a pinned compactor uses the
+// model it was configured with.
+func entryModel(ap *config.OpenAICompatibleProviderConfig, choice config.CompactorChoice) string {
+	if choice.Current || choice.Model == "" {
+		return ap.Model
+	}
+	return choice.Model
 }
 
 // restoreModeInstructions repairs legacy pre-turn compaction before sampling,
@@ -447,47 +468,6 @@ func responseTruncated(reason string) bool {
 		return true
 	}
 	return false
-}
-
-func validateCompactionResponse(ctx context.Context, result *types.StreamResult) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if result == nil || result.Interrupted {
-		return "", fmt.Errorf("compaction response interrupted or missing")
-	}
-	if responseTruncated(result.FinishReason) {
-		return "", fmt.Errorf("compaction response truncated: %s", result.FinishReason)
-	}
-	switch strings.ToLower(result.FinishReason) {
-	case "":
-		// Compatible backends may omit the finish reason on a successful stream.
-		// Missing metadata is not an explicit failure or truncation signal.
-	case "stop", "end_turn", "stop_sequence":
-	default:
-		return "", fmt.Errorf("compaction response not complete: %q", result.FinishReason)
-	}
-	if len(result.ToolCalls) != 0 || strings.TrimSpace(result.Content) == "" {
-		return "", fmt.Errorf("compaction response has tools or an empty summary")
-	}
-	return result.Content, nil
-}
-
-func getCompactionResponse(ctx context.Context, messages []types.Message, s *ChatSession) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	// A utility request must not inherit the active mode's instructions.
-	provider, err := buildProvider(config.Get(), nil)
-	if err != nil {
-		return "", err
-	}
-	ctx = logger.WithAgent(sessionLogContext(ctx, s), "compaction", "")
-	result, err := providers.WithLogging(provider).StreamChat(ctx, pruneScreenshotImages(messages, 0), nil, providers.NewSilentOutputSink())
-	if err != nil {
-		return "", err
-	}
-	return validateCompactionResponse(ctx, result)
 }
 
 // tokenStatsLine returns the formatted string with token stats.

@@ -174,6 +174,13 @@ type Config struct {
 	// CompactionMidTurn additionally checks completed tool-batch boundaries.
 	// It is opt-in and has no effect while CompactionEnabled is false.
 	CompactionMidTurn bool `json:"compaction_mid_turn"`
+	// CompactionModel selects who writes the summary. A zero value means
+	// "current": the model active at compaction time (see
+	// config/compaction_model.go).
+	CompactionModel CompactionModelConfig `json:"compaction_model,omitempty"`
+	// CompactionOnFailure is the failure policy of the compaction request:
+	// "fallback_current" (default) or "abort".
+	CompactionOnFailure string `json:"compaction_on_failure,omitempty"`
 	// AGENTS.md project-instruction settings (see config/agentsmd.go and
 	// tools/agentsmd.go). The instruction chain is injected into the system
 	// prompt as a <project_context> block.
@@ -209,7 +216,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 10
+const CurrentSchemaVersion = 11
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.

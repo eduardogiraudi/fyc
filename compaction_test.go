@@ -49,7 +49,7 @@ func TestAutoCompactDecision(t *testing.T) {
 
 func TestCompactContextNoopWhenNothingToCompact(t *testing.T) {
 	s := &ChatSession{ChatHistory: []types.Message{{Role: "system", Content: "sys"}}}
-	before, after, err := compactContext(s, providers.NewSilentOutputSink())
+	before, after, _, err := compactContext(s, providers.NewSilentOutputSink())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,14 +107,14 @@ func TestTurnCompactionRetainsRequestInstructionsAndCompleteBatch(t *testing.T) 
 			}
 			ctx := newGenerationContext(s)
 			defer finishGeneration(s)
-			before, after, err := compactContextWith(ctx, s, true, 8000, func(got context.Context, messages []types.Message, _ *ChatSession) (string, error) {
+			before, after, _, err := compactContextWith(ctx, s, true, 8000, func(got context.Context, messages []types.Message, _ *ChatSession) (compactionResult, error) {
 				if got != ctx || s.IsGenerating.Load() != 1 {
 					t.Fatal("compaction must share the live turn context")
 				}
 				if len(messages) != 2 || len(messages[1].ToolCalls) != 0 || strings.Contains(messages[1].Content, "implement exactly this") {
 					t.Fatal("retained request must not be summarized or replayed as live tools")
 				}
-				return "## Goal\nContinue implementation.", nil
+				return compactionResult{Summary: "## Goal\nContinue implementation."}, nil
 			})
 			if err != nil || after >= before {
 				t.Fatalf("compaction: %d -> %d, %v", before, after, err)
@@ -142,11 +142,11 @@ func TestTurnCompactionSummarizesOversizedActiveBatchWhole(t *testing.T) {
 	history[4].ToolCalls[1].Function.Arguments = map[string]interface{}{"path": "sub"}
 	history[5].Content = strings.Repeat("huge output ", 1000)
 	s := &ChatSession{ChatHistory: history}
-	_, _, err := compactContextWith(context.Background(), s, true, 1000, func(_ context.Context, messages []types.Message, _ *ChatSession) (string, error) {
+	_, _, _, err := compactContextWith(context.Background(), s, true, 1000, func(_ context.Context, messages []types.Message, _ *ChatSession) (compactionResult, error) {
 		if !strings.Contains(messages[1].Content, "huge output") || !strings.Contains(messages[1].Content, "second result") {
 			t.Fatal("the entire oversized batch must be summarized")
 		}
-		return "batch completed", nil
+		return compactionResult{Summary: "batch completed"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,9 +172,9 @@ func TestCompactionRejectsPendingOrMismatchedTools(t *testing.T) {
 				history = append(history, types.Message{Role: "tool", Content: "orphan"})
 			}
 			s := &ChatSession{ChatHistory: history}
-			_, _, err := compactContextWith(context.Background(), s, true, 1000, func(context.Context, []types.Message, *ChatSession) (string, error) {
+			_, _, _, err := compactContextWith(context.Background(), s, true, 1000, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 				t.Fatal("must not request a summary with pending tools")
-				return "", nil
+				return compactionResult{}, nil
 			})
 			if err == nil || !reflect.DeepEqual(history, s.ChatHistory) {
 				t.Fatal("unsafe history accepted or mutated")
@@ -191,17 +191,17 @@ func TestCompactionFailuresKeepHistoryAndModeFlag(t *testing.T) {
 			s := &ChatSession{ChatHistory: history, persistentModeInjected: "debug"}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			_, _, err := compactContextWith(ctx, s, true, 1000, func(context.Context, []types.Message, *ChatSession) (string, error) {
+			_, _, _, err := compactContextWith(ctx, s, true, 1000, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 				switch kind {
 				case "empty":
-					return "  \n", nil
+					return compactionResult{Summary: "  \n"}, nil
 				case "error":
-					return "", errors.New("provider failure")
+					return compactionResult{}, errors.New("provider failure")
 				case "cancel":
 					cancel()
-					return "partial", nil
+					return compactionResult{Summary: "partial"}, nil
 				default:
-					return strings.Repeat("large summary ", 10000), nil
+					return compactionResult{Summary: strings.Repeat("large summary ", 10000)}, nil
 				}
 			})
 			if err == nil || !reflect.DeepEqual(history, s.ChatHistory) || s.persistentModeInjected != "debug" {
@@ -255,12 +255,12 @@ func TestMidTurnCompactionAfterCompletedToolsIsOptIn(t *testing.T) {
 				}
 				return &types.StreamResult{Content: "done", FinishReason: "stop"}, nil
 			})
-			streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(ctx context.Context, _ []types.Message, session *ChatSession) (string, error) {
+			streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(ctx context.Context, _ []types.Message, session *ChatSession) (compactionResult, error) {
 				summaries++
 				if len(pendingToolCalls(session.ChatHistory)) != 0 || session.ChatHistory[len(session.ChatHistory)-2].Role != "tool" || session.ChatHistory[len(session.ChatHistory)-1].Role != "tool" || ctx != s.runContext() {
 					t.Fatal("compaction split a batch or lost cancellation")
 				}
-				return "work in progress", nil
+				return compactionResult{Summary: "work in progress"}, nil
 			})
 			want := 0
 			if flags[0] && flags[1] {
@@ -288,12 +288,12 @@ func TestMidTurnCompactionFailureAndAttemptGuards(t *testing.T) {
 			}
 			return &types.StreamResult{Content: "done", FinishReason: "stop"}, nil
 		})
-		streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (string, error) {
+		streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 			summaries++
 			if failure {
-				return "", errors.New("failed")
+				return compactionResult{}, errors.New("failed")
 			}
-			return "small summary", nil
+			return compactionResult{Summary: "small summary"}, nil
 		})
 		want := 2
 		if failure {
@@ -314,12 +314,12 @@ func TestCompactionCancellationStopsFollowUp(t *testing.T) {
 		requests++
 		return &types.StreamResult{Content: "must not run"}, nil
 	})
-	streamProviderLoop(s, streamOptions{}, cfg, p, func(ctx context.Context, _ []types.Message, _ *ChatSession) (string, error) {
+	streamProviderLoop(s, streamOptions{}, cfg, p, func(ctx context.Context, _ []types.Message, _ *ChatSession) (compactionResult, error) {
 		s.GenerationCancelMu.Lock()
 		cancel := s.GenerationCancel
 		s.GenerationCancelMu.Unlock()
 		cancel()
-		return "partial", nil
+		return compactionResult{Summary: "partial"}, nil
 	})
 	if requests != 0 || !reflect.DeepEqual(history, s.ChatHistory) || s.IsGenerating.Load() != 0 {
 		t.Fatal("canceled compaction mutated history or continued sampling")
@@ -338,9 +338,9 @@ func TestMidTurnCompactionWaitsForAGUIResume(t *testing.T) {
 		requests++
 		return &types.StreamResult{Content: strings.Repeat("work ", 1000), ToolCalls: []types.ToolCall{writeCall("a", "a.txt", "a"), writeCall("b", "b.txt", "b")}}, nil
 	})
-	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (string, error) {
+	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 		summaries++
-		return "summary", nil
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if requests != 1 || summaries != 0 || agui.RunInterrupted(runCtx) == nil || len(pendingToolCalls(s.ChatHistory)) != 2 {
 		t.Fatal("pending AG-UI tools were compacted or sampled again")
@@ -357,9 +357,9 @@ func TestMidTurnCompactionWaitsForAGUIResume(t *testing.T) {
 	p = compactionProviderFunc(func(context.Context, []types.Message, []types.Tool, types.OutputSink) (*types.StreamResult, error) {
 		return &types.StreamResult{Content: "done", FinishReason: "stop"}, nil
 	})
-	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (string, error) {
+	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 		summaries++
-		return "summary", nil
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if summaries != 1 {
 		t.Fatal("compaction did not run after completed resume")
@@ -369,8 +369,8 @@ func TestMidTurnCompactionWaitsForAGUIResume(t *testing.T) {
 func TestAutoCompactIneffectiveSummaryStaysSuppressedUntilHeadroom(t *testing.T) {
 	compactionTestConfig(t, true, true, 1000)
 	s := &ChatSession{ChatHistory: turnCompactionHistory()}
-	respond := func(context.Context, []types.Message, *ChatSession) (string, error) {
-		return strings.Repeat("s", 2800), nil
+	respond := func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
+		return compactionResult{Summary: strings.Repeat("s", 2800)}, nil
 	}
 	maybeAutoCompactWith(context.Background(), s, providers.NewSilentOutputSink(), true, respond)
 	if !s.autoCompactSuppressed {
@@ -391,8 +391,8 @@ func TestCompactedHistoryPersistence(t *testing.T) {
 	compactionTestConfig(t, true, true, 8000)
 	ws := testWorkspace(t)
 	s := &ChatSession{ChatHistory: turnCompactionHistory()}
-	_, _, err := compactContextWith(context.Background(), s, true, 8000, func(context.Context, []types.Message, *ChatSession) (string, error) {
-		return "summary", nil
+	_, _, _, err := compactContextWith(context.Background(), s, true, 8000, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -420,9 +420,9 @@ func TestLegacyAutoCompactionStillRunsOnlyInitially(t *testing.T) {
 		}
 		return &types.StreamResult{Content: "done", FinishReason: "stop"}, nil
 	})
-	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (string, error) {
+	streamProviderLoop(s, streamOptions{includeToolCallID: true}, cfg, p, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
 		summaries++
-		return "summary", nil
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if summaries != 1 || requests != 2 || s.ChatHistory[3].Content != "Understood. I'm ready to continue from where we left off." {
 		t.Fatal("default compaction behaviour changed")
@@ -457,7 +457,7 @@ func TestCompactionValidatesRealProviderBeforeCommitting(t *testing.T) {
 			t.Setenv("FYC_CACHE_DIR", t.TempDir())
 			history := turnCompactionHistory()
 			s := &ChatSession{ChatHistory: history}
-			_, _, err := compactContextWith(context.Background(), s, true, 8000, getCompactionResponse)
+			_, _, _, err := compactContextWith(context.Background(), s, true, 8000, getCompactionResponse)
 			if reason == "stop" || reason == "" {
 				if err != nil || reflect.DeepEqual(s.ChatHistory, history) {
 					t.Fatalf("valid provider summary rejected: %v", err)
@@ -476,8 +476,8 @@ func TestTurnCompactionKeepsLargeRequestAndDeveloperInstructions(t *testing.T) {
 	developer := types.Message{Role: "developer", Content: "permanent developer instructions"}
 	history = append([]types.Message{history[0], developer}, history[1:]...)
 	s := &ChatSession{ChatHistory: history}
-	_, _, err := compactContextWith(context.Background(), s, true, 1000, func(context.Context, []types.Message, *ChatSession) (string, error) {
-		return "summary", nil
+	_, _, _, err := compactContextWith(context.Background(), s, true, 1000, func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

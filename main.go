@@ -126,6 +126,7 @@ func main() {
 	info = append(info, fmt.Sprintf("%s %s %s %s", ui.KeyStyle.Render("reasoning:"), ui.ValueStyle.Render(cfg.Reasoning.Label()), ui.KeyStyle.Render("• temperature:"), ui.ValueStyle.Render(currentTemperatureLabel())))
 	if cfg.CompactionEnabled {
 		label := fmt.Sprintf("on @ %d tokens", config.EffectiveCompactionThreshold())
+		label += " • compactor: " + cfg.CompactorLabel()
 		if cfg.CompactionMidTurn {
 			label += " • mid-turn: on"
 		}

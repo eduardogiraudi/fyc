@@ -99,7 +99,7 @@ func TestCompactionTranscriptElidesSupersededResults(t *testing.T) {
 	history = append(history, toolPair("second", "read", pathArgs("a.go"), second)...)
 	s := &ChatSession{ChatHistory: history}
 
-	_, _, err := compactContextWith(context.Background(), s, false, 8000, func(_ context.Context, messages []types.Message, _ *ChatSession) (string, error) {
+	_, _, _, err := compactContextWith(context.Background(), s, false, 8000, func(_ context.Context, messages []types.Message, _ *ChatSession) (compactionResult, error) {
 		transcript := messages[len(messages)-1].Content
 		if strings.Contains(transcript, "old body") {
 			t.Fatal("a superseded result was sent to the summarizer")
@@ -107,7 +107,7 @@ func TestCompactionTranscriptElidesSupersededResults(t *testing.T) {
 		if !strings.Contains(transcript, "new body") || !strings.Contains(transcript, "omitted from this transcript") {
 			t.Fatal("the latest result or the elision note is missing from the transcript")
 		}
-		return "summary", nil
+		return compactionResult{Summary: "summary"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -205,6 +205,21 @@ var configMigrations = store.Migrations{
 		doc["schema"] = json.RawMessage(strconv.Itoa(10))
 		return json.Marshal(doc)
 	},
+	10: func(data []byte) ([]byte, error) {
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
+		// v11 lets the compaction summary be written by a dedicated model.
+		// Absent compaction_model means "current" (the model active at
+		// compaction time) and absent compaction_on_failure means the
+		// non-destructive fallback, so the defaults need no explicit value.
+		doc["schema"] = json.RawMessage(strconv.Itoa(11))
+		return json.Marshal(doc)
+	},
 }
 
 // Load reads config.json into the in-memory configuration, ignoring errors.

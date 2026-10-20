@@ -191,7 +191,7 @@ The configuration flow can manage:
 - language-server discovery overrides (`lsp.search_paths`, `lsp.binaries`, `lsp.disabled`). JSON only — see [**LSP servers**](#lsp-servers)
 - extra browser executables for `web_search` (`browser_paths`), under **CLI Settings → Browser Paths (web_search)**
 - optional delay between requests
-- auto-compaction settings (enable/disable + estimated-token threshold), under **CLI Settings**
+- auto-compaction settings (enable/disable, estimated-token threshold, the model that writes the summary and its failure policy), under **CLI Settings** / **CLI Settings → Compaction Model**
 - pre/post tool-execution hooks (enable/disable + command), under **CLI Settings → Hooks**
 - status-bar hook (per provider: on/off, command, include API keys/tokens, refresh interval, refresh on turn), under **CLI Settings → Status Bar Hook**
 - base system prompt (persona), stored in `SYSTEM_PROMPT.txt` with `${VAR}` placeholders, under **CLI Settings**
@@ -215,6 +215,8 @@ Example OpenAI-compatible local provider:
   "compaction_enabled": true,
   "compaction_threshold": 32000,
   "compaction_mid_turn": false,
+  "compaction_model": {"kind": "anthropic", "provider": "Claude", "model": "claude-haiku-4.5"},
+  "compaction_on_failure": "fallback_current",
   "agents_md_enabled": true,
   "agents_md_max_bytes": 32768,
   "agents_md_fallback_filenames": ["CLAUDE.md", "GEMINI.md"],
@@ -347,9 +349,13 @@ Configure it under **CLI Settings → Auto Compaction**:
 - **Auto Compaction:** toggles `compaction_enabled` (default `false`).
 - **Compaction threshold:** adjusted with ◀/▶ (step `1000` tokens, range `1000`–`1000000`), persisted as `compaction_threshold` (default `32000`).
 - **Mid-turn compaction:** separate opt-in switch, `compaction_mid_turn` (default `false`, including migrated configurations). Requires **Auto Compaction** to be enabled. Checks before subsequent model requests too, only after every result in a tool batch has been recorded; never while streaming, executing tools or awaiting an AG-UI interrupt resume.
+- **Compaction model:** which model writes the summary, under **CLI Settings → Compaction Model** (`compaction_model`). The default is **current**: the model active *at compaction time*, resolved again on every attempt, so a `/models` switch mid-session is followed. A dedicated model can be pinned by provider entry and model id (`{"kind": "anthropic", "provider": "Claude", "model": "claude-haiku-4.5"}`); `kind` is one of `gemini`, `codex`, `openai`, `responses`, `anthropic` and disambiguates provider entries that share a name across lists. An empty `model` inherits the entry's model. Pinning never changes the active provider: the compaction path builds a provider from the entry's credentials and never writes `config.json`.
+- **Failure policy:** `compaction_on_failure`, also under **Compaction Model**. `fallback_current` (default) retries the summary **once** with the model active at that moment, without touching the configuration; `abort` interrupts compaction and leaves the history untouched. An interruption (ctrl+c, a cancelled run) is never retried, and the fallback is skipped when it would address the same provider entry and model that just failed.
 - **Back** saves all settings; `q`/`esc` discards changes.
 
 With mid-turn compaction enabled, automatic compaction keeps permanent system/developer instructions, the latest user request verbatim, active mode instructions and a recent suffix of complete exchanges. The recent suffix has a soft budget of one quarter of the configured threshold, capped at `8000` estimated tokens; a tool-call/result group is never split. An oversized group can be summarized as a whole, so a long active turn need not be retained in full. The replacement has no synthetic acknowledgement and the active task continues immediately.
+
+The compactor is re-read from `config.Get()` on every attempt (a value copy of the configuration; provider entries are read from the live configuration), so a pinned provider entry that was deleted or renamed, a model the endpoint no longer serves, or a revoked key are indistinguishable from an API error: they follow the same failure policy. The fallback re-reads the configuration (the active model may have changed in the meantime) and compares the resolved provider entry and model, so a compactor pinned to the active model never repeats the request that just failed.
 
 Before the summary is requested, the transcript handed to the compactor is pruned of duplicates: when a read-only snapshot tool (`read`, `get_anchors`, `ls`, `grep`, `context_snapshot`) was called again later with the same target, the earlier results become a one-line note and only the latest one is kept. Error results and short outputs are never replaced, and every result keeps its role, name and `tool_call_id`, so the call/result pairings stay valid. The pruning applies **only** to the summarization request: the live history and the saved session are untouched, so nothing is lost that compaction was not already replacing.
 
@@ -674,11 +680,13 @@ curl -N http://127.0.0.1:8787/ \
 | `streaming.go` | Provider dispatch and streaming/tool-call loops. |
 | `tokens.go` | Local token estimation (text, messages, images, tool schemas) used for the compaction threshold. |
 | `compaction.go` | `/compact` implementation (`compactContext`) and the auto-compaction trigger with its anti-loop guard (`maybeAutoCompact`). |
+| `compaction_responder.go` | The compaction request itself: resolves the compactor from `config.Get()` on every attempt, applies the failure policy (retry once with the active model, or abort) and reports which model wrote the summary. |
 | `config/` | Persistent config, tool state, provider/model switching, provider setup, MCP setup. |
 | `config/git.go` | Git tool registry (names, tiers, default-disabled set) and the git permission model. |
 | `config/secrets.go` | Secret placeholders (`${VAR}` / `${VAR:-default}`) and the `auth.json` store: resolution at load, migration of inline secrets on save, generated (collision-free) variable names, the defensive `.gitignore`/`.fycignore` next to the config, and a *frozen* collapse (writes nothing to `auth.json`) when the store is unreadable or unwritable. |
 | `config/system_prompt.go` | Editable base system prompt: `SYSTEM_PROMPT.txt` storage and `${VAR}` rendering (environment variables only, no shell). |
 | `config/agentsmd.go` | AGENTS.md settings: enable flag, byte budget, and fallback filenames (with defaults). |
+| `config/compaction_model.go` | Compaction model selection (`compaction_model`) and failure policy (`compaction_on_failure`): provider-kind resolution against the live provider lists, “current” as the default, UI labels, and the per-provider reasoning key used by the compactor. |
 | `config/lsp.go` | LSP discovery overrides: search paths, per-server binaries, and the disabled list (accessed via `config.Get().LSP`). |
 | `config/browser.go` | `web_search` browser overrides: the `browser_paths` list (setter/getter) probed by the crawler before the built-in locations; edited under **CLI Settings → Browser Paths**. |
 | `lsp/` | Language-server discovery (PATH, Mason, VS Code, Zed — Linux/macOS/Windows) and the LSP client/manager used by the `lsp_*` tools. |

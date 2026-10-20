@@ -37,6 +37,8 @@ func defaults() Config {
 		CompactionEnabled:                  false,
 		CompactionThreshold:                DefaultCompactionThreshold,
 		CompactionMidTurn:                  false,
+		CompactionModel:                    CompactionModelConfig{},
+		CompactionOnFailure:                string(CompactionFallbackCurrent),
 		AgentsMDEnabled:                    true,
 		AgentsMDMaxBytes:                   DefaultAgentsMDMaxBytes,
 		AgentsMDFallbackFilenames:          append([]string(nil), DefaultAgentsMDFallbackFilenames...),
@@ -103,6 +105,17 @@ func SetCompactionThreshold(threshold int) {
 // SetCompactionMidTurn enables the additional in-turn compaction checks.
 func SetCompactionMidTurn(enabled bool) {
 	config.CompactionMidTurn = enabled
+}
+
+// SetCompactionModel stores the model that writes the compaction summary. A
+// zero value means "current" (the model active at compaction time).
+func SetCompactionModel(m CompactionModelConfig) {
+	config.CompactionModel = m
+}
+
+// SetCompactionOnFailure stores the failure policy of the compaction request.
+func SetCompactionOnFailure(p CompactionFailurePolicy) {
+	config.CompactionOnFailure = string(p)
 }
 
 // SetPreToolHook sets the pre-tool execution hook.
@@ -273,8 +286,7 @@ func ClearReasoningForProvider(provider string) {
 // the global preference; without one, the intent is global and the placement is
 // auto-detected (built-in table + models.dev catalog).
 func ActiveReasoning() (reasoning.Intent, *reasoning.Profile) {
-	pc, _ := ReasoningForProvider(CurrentProviderKey())
-	return pc.IntentOr(config.Reasoning).Intent(), pc.Profile.ToProfile()
+	return ReasoningForKey(CurrentProviderKey())
 }
 
 // ReasoningProviderKeys lists the provider identifiers that can carry a

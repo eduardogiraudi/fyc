@@ -147,8 +147,8 @@ func TestCompactionAndParallelSubagentsShareConversationLogs(t *testing.T) {
 	s := &ChatSession{RestrictedRoot: t.TempDir(), ChatHistory: []types.Message{{Role: "user", Content: "task"}}}
 	ctx := newGenerationContext(s)
 	defer finishGeneration(s)
-	if summary, err := getCompactionResponse(ctx, s.ChatHistory, s); err != nil || summary != "done" {
-		t.Fatalf("compaction: %q %v", summary, err)
+	if res, err := getCompactionResponse(ctx, s.ChatHistory, s); err != nil || res.Summary != "done" {
+		t.Fatalf("compaction: %q %v", res.Summary, err)
 	}
 	var wg sync.WaitGroup
 	for _, id := range []string{"agent-a", "agent-b"} {
