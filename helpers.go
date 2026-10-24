@@ -17,11 +17,21 @@ import (
 	"time"
 )
 
-// applyDelay sleeps for the configured delay duration (if any).
-func applyDelay() {
+// applyDelay waits for the configured delay duration (if any). It returns false
+// as soon as the turn context is cancelled, so an interrupt (ctrl+c, client
+// disconnect) is honoured immediately instead of after the whole delay.
+func applyDelay(ctx context.Context) bool {
 	cfg := config.Get()
-	if cfg.Delay > 0 {
-		time.Sleep(time.Duration(cfg.Delay * float64(time.Second)))
+	if cfg.Delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(time.Duration(cfg.Delay * float64(time.Second)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

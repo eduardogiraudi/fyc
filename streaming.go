@@ -93,8 +93,7 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 		if !retrying && instruction == "" {
 			restoreModeInstructions(s, cfg.Provider)
 		}
-		applyDelay()
-		if ctx.Err() != nil {
+		if !applyDelay(ctx) {
 			return
 		}
 		sink.Reset()
