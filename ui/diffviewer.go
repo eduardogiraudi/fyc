@@ -46,6 +46,21 @@ type DiffViewerModel struct {
 	termWidth  int
 	termHeight int
 	headerRows int // how many rows the header occupies
+
+	// render caches the wrapped rows for the current terminal width. A nil
+	// cache (models built by tests) simply recomputes on demand.
+	render *diffRenderCache
+}
+
+// diffRenderCache memoises the wrap of every diff line for one terminal width.
+// Wrapping is O(lines) with per-byte sanitising and per-rune width probing, so
+// recomputing it in every Update and View made a large diff cost hundreds of
+// milliseconds per keystroke. Bubble Tea copies the model by value: the cache
+// lives behind a pointer so one wrap survives all copies.
+type diffRenderCache struct {
+	width  int
+	ready  bool
+	visual []diffVisualLine
 }
 
 // ensureDiffLineStyles defines the lipgloss styles used for diff lines.
@@ -92,6 +107,7 @@ func RunDiffViewer(title, stats, filename string, lines []DiffLine) {
 			termWidth:  w,
 			termHeight: h,
 			headerRows: 3,
+			render:     &diffRenderCache{},
 		}
 		model.offset = model.firstChangedVisualOffset()
 
@@ -153,10 +169,29 @@ func diffPrefix(kind DiffLineKind, continuation bool) string {
 // and marker. Wrapping precedes highlighting so ANSI escapes cannot affect the
 // measurement or cause the terminal to soft-wrap behind the viewer's back.
 func (m DiffViewerModel) visualLines() []diffVisualLine {
-	width := m.termWidth
-	if width < 1 {
-		width = 80
+	width := m.wrapWidth()
+	if m.render == nil {
+		return m.wrapLines(width)
 	}
+	if m.render.ready && m.render.width == width {
+		return m.render.visual
+	}
+	m.render.visual = m.wrapLines(width)
+	m.render.width = width
+	m.render.ready = true
+	return m.render.visual
+}
+
+// wrapWidth is the cell width the diff is wrapped to. Models built outside
+// RunDiffViewer may leave termWidth unset.
+func (m DiffViewerModel) wrapWidth() int {
+	if m.termWidth < 1 {
+		return 80
+	}
+	return m.termWidth
+}
+
+func (m DiffViewerModel) wrapLines(width int) []diffVisualLine {
 	var out []diffVisualLine
 	for _, line := range m.Lines {
 		gutter := diffGutter(line)
@@ -390,8 +425,38 @@ func highlightWith(lexer chroma.Lexer, text string) string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
+// lineHighlightCache memoises highlightLine: Chroma's formatter costs ~100 µs
+// per line, which every keystroke paid again for every visible row. The view
+// is redrawn far more often than the lines change, so results are reused until
+// the cache is flushed.
+var lineHighlightCache = struct {
+	sync.Mutex
+	m map[string]string
+}{m: make(map[string]string)}
+
+// lineHighlightCacheLimit bounds the memory held by wrapped diff rows: a flush
+// costs one redraw of highlighting, never correctness.
+const lineHighlightCacheLimit = 8192
+
 func highlightLine(text, filename string) string {
-	return highlightWith(getLexer(filename), text)
+	if text == "" {
+		return text
+	}
+	key := filename + "\x00" + text
+	lineHighlightCache.Lock()
+	cached, ok := lineHighlightCache.m[key]
+	lineHighlightCache.Unlock()
+	if ok {
+		return cached
+	}
+	rendered := highlightWith(getLexer(filename), text)
+	lineHighlightCache.Lock()
+	if len(lineHighlightCache.m) >= lineHighlightCacheLimit {
+		clear(lineHighlightCache.m)
+	}
+	lineHighlightCache.m[key] = rendered
+	lineHighlightCache.Unlock()
+	return rendered
 }
 
 // shellLexerOnce is the cached bash lexer for the "See details" command

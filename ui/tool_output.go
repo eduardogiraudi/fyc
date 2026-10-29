@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"fuckyourcli/types"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 )
 
 // toolOutputLines builds the display lines for a tool call: the (wrapped)
@@ -106,25 +108,77 @@ func FormatToolOutput(label, res string, width int, maxRows int) string {
 	return "\r" + strings.Join(lines, "\n\r")
 }
 
-// wrapPlainByANSIWidth splits a single display line at width cells. Callers
-// must expand tabs first (see expandTabs): the width helpers treat a tab as
-// zero cells, the terminal does not.
+// wrapPlainByANSIWidth splits a single display line at width cells. Tabs are
+// measured against tab stops, but callers should expand them first (see
+// expandTabs) so chunk boundaries match what the terminal will draw.
 func wrapPlainByANSIWidth(line string, width int) []string {
 	if width <= 0 || line == "" {
 		return []string{line}
 	}
+	// Plain ASCII (the bulk of source lines and tool output) is one cell per
+	// byte, so it can be cut by slicing instead of walking the string rune by
+	// rune; tab handling and width probing then cost one byte scan.
+	if isPlainASCII(line) {
+		return splitPlainASCII(line, width)
+	}
 	var out []string
 	var b strings.Builder
-	for _, r := range line {
-		candidate := b.String() + string(r)
-		if b.Len() > 0 && DisplayWidth(candidate) > width {
+	// cur tracks the cells already emitted into b. Measuring the candidate
+	// prefix on every rune (b.String() + DisplayWidth) made this quadratic:
+	// a single 4 KB minified line cost millions of allocations.
+	cur := 0
+	g := uniseg.NewGraphemes(line)
+	for g.Next() {
+		cl := g.Str()
+		cw := clusterCells(cl, cur)
+		if b.Len() > 0 && cur+cw > width {
 			out = append(out, b.String())
 			b.Reset()
+			cur = 0
+			cw = clusterCells(cl, cur)
 		}
-		b.WriteRune(r)
+		b.WriteString(cl)
+		cur += cw
 	}
 	if b.Len() > 0 {
 		out = append(out, b.String())
 	}
 	return out
+}
+
+// clusterCells is the number of terminal cells a grapheme cluster advances
+// when printed at column col, matching DisplayWidth. Clusters are measured
+// whole because variation selectors and ZWJ sequences change the width of
+// their base rune.
+func clusterCells(cl string, col int) int {
+	switch c := cl[0]; {
+	case c == '\t':
+		return tabStopWidth - col%tabStopWidth
+	case c < 0x20 || c == 0x7f:
+		return 0
+	case len(cl) == 1:
+		return 1
+	}
+	return xansi.StringWidth(cl)
+}
+
+// isPlainASCII reports whether every byte is a single-cell printable ASCII
+// character: no tabs, no control bytes, no wide or combining runes.
+func isPlainASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// splitPlainASCII cuts a single-cell ASCII line into width-sized chunks.
+func splitPlainASCII(line string, width int) []string {
+	out := make([]string, 0, len(line)/width+1)
+	for len(line) > width {
+		out = append(out, line[:width])
+		line = line[width:]
+	}
+	return append(out, line)
 }

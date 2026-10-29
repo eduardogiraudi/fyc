@@ -23,6 +23,7 @@ fuckyourcli (fyc) is a Go CLI coding agent. Single Go module `fuckyourcli`, Go 1
 ## Conventions
 - AGENTS.md: add only guidance that is genuinely useful across tasks (non-obvious invariants, build quirks, layout); never task-type-scoped instructions or things discoverable from the code.
 - Comments in English, kept minimal (explain WHY, not WHAT).
+- Bubble Tea models are copied by value on every message: anything O(lines) that a viewer computes (wrapped rows, per-line highlighting) must hang off a shared pointer keyed by the terminal width, never run inside `Update`/`View` (`ui/diffviewer.go`).
 - Changing the `config.json` shape: bump `config.CurrentSchemaVersion` and add a migration in `config/persistence.go`.
 - `store.LoadVersioned` decodes into a fresh value; pre-seeding its destination cannot supply defaults for missing JSON fields. Use document-level `UnmarshalJSON` for defaults that must also apply to current-schema files.
 - Secrets/tokens: never store a value in `config.json`; keep a `${VAR}` placeholder and the value in `auth.json` (resolution order: `auth.json` then env). Add new secret fields to `config/secrets.go` (capture/expand/collapse), not to the read sites. When `auth.json` is unreadable, the collapse runs in `frozen` mode: keep the on-disk expressions, write nothing to the store (never drop an unresolved `${VAR}` or emit a placeholder whose value was not stored).

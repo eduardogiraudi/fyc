@@ -55,6 +55,20 @@ func expandTabs(s string, tabWidth int) string {
 // consumed by the terminal together with whatever follows it — including the
 // UI we draw afterwards — so nothing but text may reach the display.
 func stripControlSequences(s string) string {
+	// Clean input is the common case (source code in a diff, tool output that
+	// already passed through here): returning it untouched keeps large payloads
+	// from being copied byte by byte.
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {

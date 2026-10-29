@@ -87,3 +87,53 @@ func TestDiffViewerScrollsVisualRows(t *testing.T) {
 		t.Fatalf("down offset = %d, want 1 visual row", got.offset)
 	}
 }
+
+// Wrapping every line on every frame is what made large diffs unresponsive:
+// the rows must be computed once per terminal width, no matter how many times
+// Update and View run.
+func TestDiffViewerWrapsRowsOncePerWidth(t *testing.T) {
+	lines := make([]DiffLine, 200)
+	for i := range lines {
+		lines[i] = DiffLine{Kind: DiffContext, LineNum: i + 1, Content: "line " + strings.Repeat("y", 60)}
+	}
+	m := DiffViewerModel{
+		Filename:   "a.go",
+		Lines:      lines,
+		termWidth:  30,
+		termHeight: 10,
+		headerRows: 3,
+		render:     &diffRenderCache{},
+	}
+	first := m.visualLines()
+	second := m.visualLines()
+	if len(first) == 0 || &first[0] != &second[0] {
+		t.Fatal("visual rows were wrapped again for an unchanged width")
+	}
+
+	wider := m
+	wider.termWidth = 60
+	if got := wider.visualLines(); &got[0] == &first[0] {
+		t.Fatal("width change did not re-wrap the rows")
+	}
+}
+
+func TestWrapPlainByANSIWidthKeepsTextAndFitsWidth(t *testing.T) {
+	for _, in := range []string{"", "short", strings.Repeat("x", 100), "日本語テキスト", "abc日本語def", "❤️", "a❤️b❤️c", "👨‍👩‍👧", "x👨‍👩‍👧y", strings.Repeat("日", 2000)} {
+		for _, width := range []int{2, 3, 7, 10, 80} {
+			chunks := wrapPlainByANSIWidth(in, width)
+			if got := strings.Join(chunks, ""); got != in {
+				t.Fatalf("width %d: %q -> %q", width, in, got)
+			}
+			for i, chunk := range chunks {
+				if got := DisplayWidth(chunk); got > width {
+					t.Fatalf("width %d: chunk %d is %d cells: %q", width, i, got, chunk)
+				}
+			}
+		}
+	}
+	// Tabs advance to the next tab stop and must survive the split; callers
+	// still expandTabs first so each chunk is exactly the width they measured.
+	if got := strings.Join(wrapPlainByANSIWidth("a\tb", 4), ""); got != "a\tb" {
+		t.Fatalf("tab input lost text: %q", got)
+	}
+}
