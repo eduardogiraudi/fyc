@@ -11,6 +11,9 @@ import (
 // which auto-compaction triggers when no explicit threshold is configured.
 const DefaultCompactionThreshold = 32000
 
+// DefaultMaxMedia bounds image attachments when no valid limit is configured.
+const DefaultMaxMedia = 10
+
 var config = defaults()
 
 // defaults returns a freshly initialised configuration with every field at its
@@ -20,6 +23,7 @@ func defaults() Config {
 	return Config{
 		Schema:                             CurrentSchemaVersion,
 		CompactBanner:                      true,
+		MaxMedia:                           DefaultMaxMedia,
 		Provider:                           ProviderOpenAICompatible,
 		Model:                              "",
 		AllowFileWrite:                     false,
@@ -85,6 +89,19 @@ func SetDelay(delay float64) {
 // SetTemperature sets the temperature for AI responses
 func SetTemperature(temp float64) {
 	config.Temperature = temp
+}
+
+// SetMaxMedia sets the image attachment limit for model requests.
+func SetMaxMedia(limit int) {
+	config.MaxMedia = limit
+}
+
+// EffectiveMaxMedia applies the default to unset or invalid limits.
+func EffectiveMaxMedia() int {
+	if config.MaxMedia <= 0 {
+		return DefaultMaxMedia
+	}
+	return config.MaxMedia
 }
 
 // SetReasoning persists the thinking/reasoning preference.

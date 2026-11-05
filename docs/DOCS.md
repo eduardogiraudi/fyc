@@ -190,6 +190,7 @@ The configuration flow can manage:
 - git permissions (`git.allow_write`, `git.allow_network`, `git.allow_destructive`, `git.allow_force_push`, `git.default_remote`), under **Git Permissions**
 - language-server discovery overrides (`lsp.search_paths`, `lsp.binaries`, `lsp.disabled`). JSON only — see [**LSP servers**](#lsp-servers)
 - extra browser executables for `web_search` (`browser_paths`), under **CLI Settings → Browser Paths (web_search)**
+- recent image attachments sent to the model (`max_media`, default `10`), under **CLI Settings → Max Media**. The limit counts individual images from computer use and `read_media`; older images become text placeholders in requests, without changing saved history. Missing, zero or negative values use the default. Token estimation and compaction planning use the same limit.
 - optional delay between requests
 - auto-compaction settings (enable/disable, estimated-token threshold, the model that writes the summary and its failure policy), under **CLI Settings** / **CLI Settings → Compaction Model**
 - pre/post tool-execution hooks (enable/disable + command), under **CLI Settings → Hooks**
@@ -211,6 +212,7 @@ Example OpenAI-compatible local provider:
     }
   ],
   "temperature": 0.1,
+  "max_media": 10,
   "reasoning": {"mode": "effort", "effort": "high"},
   "compaction_enabled": true,
   "compaction_threshold": 32000,

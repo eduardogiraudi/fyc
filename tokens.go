@@ -12,6 +12,7 @@ import (
 	"math"
 	"unicode/utf8"
 
+	"fuckyourcli/config"
 	"fuckyourcli/types"
 )
 
@@ -99,6 +100,6 @@ func currentContextTokens(s *ChatSession) int {
 	if s == nil {
 		return 0
 	}
-	history := pruneScreenshotImages(s.ChatHistory, maxKeptScreenshots)
+	history := pruneScreenshotImages(s.ChatHistory, config.EffectiveMaxMedia())
 	return estimateHistoryTokens(history) + estimateToolsTokens(s.getToolsForAI())
 }

@@ -98,8 +98,8 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 		}
 		sink.Reset()
 
-		// Bound context growth: only the most recent screenshots stay attached.
-		messages := pruneScreenshotImages(s.ChatHistory, maxKeptScreenshots)
+		// Bound context growth: only the most recent media stay attached.
+		messages := pruneScreenshotImages(s.ChatHistory, config.EffectiveMaxMedia())
 		if instruction != "" && cfg.Provider != config.ProviderGemini {
 			// Transport-only instructions must not split a completed tool batch
 			// or change the conversation guarded by the retry fingerprint.

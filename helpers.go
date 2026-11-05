@@ -35,26 +35,28 @@ func applyDelay(ctx context.Context) bool {
 	}
 }
 
-// maxKeptScreenshots is the number of most recent computer-use screenshots
-// that stay attached to the conversation when a request is sent to the model.
-const maxKeptScreenshots = 2
-
-// pruneScreenshotImages returns a copy of history where all but the most
-// recent `keep` screenshot images are replaced by a text placeholder, so old
-// screenshots do not inflate the context indefinitely.
+// pruneScreenshotImages returns a copy of history with only the most recent
+// `keep` image attachments (computer use and read_media), replacing older ones
+// with a text placeholder so media do not inflate the context indefinitely.
 func pruneScreenshotImages(history []types.Message, keep int) []types.Message {
 	out := make([]types.Message, len(history))
 	copy(out, history)
-	seen := 0
+	remaining := max(keep, 0)
 	for i := len(out) - 1; i >= 0; i-- {
-		if len(out[i].Images) == 0 {
+		images := out[i].Images
+		if len(images) == 0 {
 			continue
 		}
-		seen++
-		if seen <= keep {
+		kept := min(len(images), remaining)
+		remaining -= kept
+		if kept == len(images) {
 			continue
 		}
-		out[i].Images = nil
+		if kept == 0 {
+			out[i].Images = nil
+		} else {
+			out[i].Images = images[len(images)-kept:]
+		}
 		const placeholder = "[screenshot image omitted to save context]"
 		if out[i].Content == "" {
 			out[i].Content = placeholder

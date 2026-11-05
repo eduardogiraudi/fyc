@@ -138,6 +138,8 @@ type Config struct {
 	AllowFileWrite   bool         `json:"allow_file_write"`
 	AskFileWriteEach bool         `json:"ask_file_write_each"`
 	CompactBanner    bool         `json:"compact_banner"`
+	// MaxMedia bounds the recent image attachments sent with each request.
+	MaxMedia int `json:"max_media"`
 	// AllowComputerUse persists "Allow always" for computer-use tools.
 	AllowComputerUse bool    `json:"allow_computer_use"`
 	NoAsk            bool    `json:"-"`
@@ -216,16 +218,16 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 11
+const CurrentSchemaVersion = 12
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.
 func (Config) SchemaVersion() int { return CurrentSchemaVersion }
 
-// UnmarshalJSON keeps compact mode enabled when the optional setting is absent.
+// UnmarshalJSON supplies defaults for optional settings even in current-schema files.
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type plain Config
-	decoded := plain{CompactBanner: true}
+	decoded := plain{CompactBanner: true, MaxMedia: DefaultMaxMedia}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}

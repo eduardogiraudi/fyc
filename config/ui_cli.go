@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"fuckyourcli/ui"
@@ -25,6 +26,7 @@ func manageCLISettings() {
 			"Status Bar Hook",
 			"System Prompt (persona)",
 			"Browser Paths (web_search)",
+			fmt.Sprintf("Max Media (current: %d)", EffectiveMaxMedia()),
 			"← Back",
 		})
 
@@ -42,10 +44,35 @@ func manageCLISettings() {
 		case 5:
 			manageBrowserPaths()
 		case 6:
+			manageMaxMedia()
+		case 7:
 			return
 		case ui.SelectorCanceled:
 			return // q / Ctrl+C: leave the CLI Settings menu
 		}
+	}
+}
+
+func manageMaxMedia() {
+	for {
+		line := strings.TrimSpace(ui.InputText(fmt.Sprintf(
+			"Max media images per request (current: %d, default: %d):", EffectiveMaxMedia(), DefaultMaxMedia,
+		)))
+		if line == "" {
+			return
+		}
+		limit, err := strconv.Atoi(line)
+		if err != nil || limit <= 0 {
+			fmt.Println(ui.ErrorStyle.Render("Enter a positive integer."))
+			continue
+		}
+		SetMaxMedia(limit)
+		if err := SaveE(); err != nil {
+			fmt.Println(ui.ErrorStyle.Render("Could not save max media: " + err.Error()))
+			return
+		}
+		fmt.Println(ui.OkStyle.Render(fmt.Sprintf("Max media updated: %d", EffectiveMaxMedia())))
+		return
 	}
 }
 

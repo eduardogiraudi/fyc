@@ -243,7 +243,7 @@ func planTurnCompaction(s *ChatSession, threshold int) (compactionPlan, error) {
 	// An oversized active turn may itself be summarized, never the user input.
 	budget := min(threshold/4, 8000)
 	cut, used := len(body), 0
-	pruned := pruneScreenshotImages(body, maxKeptScreenshots)
+	pruned := pruneScreenshotImages(body, config.EffectiveMaxMedia())
 	for i := len(starts) - 1; i >= 0; i-- {
 		start := starts[i]
 		cost := estimateHistoryTokens(pruned[start:cut])
@@ -339,7 +339,7 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 			Role: "assistant", Content: "Understood. I'm ready to continue from where we left off.",
 		})
 	}
-	after = estimateHistoryTokens(pruneScreenshotImages(history, maxKeptScreenshots)) + estimateToolsTokens(s.getToolsForAI())
+	after = estimateHistoryTokens(pruneScreenshotImages(history, config.EffectiveMaxMedia())) + estimateToolsTokens(s.getToolsForAI())
 	if retainTurn && after >= before {
 		return before, before, res, fmt.Errorf("compaction did not reduce the context")
 	}

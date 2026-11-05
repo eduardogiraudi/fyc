@@ -149,8 +149,9 @@ func TestCompactionModelMigration(t *testing.T) {
 	if err := json.Unmarshal(raw, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if string(persisted["schema"]) != "11" {
-		t.Fatalf("schema on disk = %s", persisted["schema"])
+	var schema int
+	if err := json.Unmarshal(persisted["schema"], &schema); err != nil || schema != CurrentSchemaVersion {
+		t.Fatalf("schema on disk = %s, want %d", persisted["schema"], CurrentSchemaVersion)
 	}
 }
 
