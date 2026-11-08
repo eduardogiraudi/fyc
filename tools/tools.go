@@ -84,7 +84,7 @@ func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *Ig
 		return textResult(executeReadSkillTool(args, restrictedRoot))
 
 	case "web_search":
-		return textResult(executeWebSearchTool(args))
+		return textResult(executeWebSearchTool(ctx, args))
 
 	case "ls":
 		return textResult(executeLSTool(args, restrictedRoot, globalIgnore))

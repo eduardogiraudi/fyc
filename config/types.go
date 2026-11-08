@@ -203,11 +203,10 @@ type Config struct {
 	Git GitConfig `json:"git,omitempty"`
 	// LSP holds the language-server discovery overrides (see config/lsp.go).
 	LSP LSPConfig `json:"lsp,omitempty"`
-	// BrowserPaths lists explicit browser executables (non-canonical installs)
-	// probed by the crawler before the built-in locations; web_search is
-	// disabled when none of them, nor any built-in one, yields a browser.
-	// See crawl/findBrowser.
+	// BrowserPaths lists browser executables probed before built-in locations.
 	BrowserPaths []string `json:"browser_paths,omitempty"`
+	// Crawl holds the network policy for HTTP and browser-backed crawling.
+	Crawl CrawlConfig `json:"crawl,omitempty"`
 	// rawSecrets holds the on-disk expression of every secret field captured at
 	// load time (see config/secrets.go). It is never persisted: SaveE uses it to
 	// keep an untouched ${VAR} placeholder instead of overwriting it with a
@@ -218,7 +217,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 12
+const CurrentSchemaVersion = 13
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.

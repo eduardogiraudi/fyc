@@ -4,16 +4,15 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
 
 // ---------------------------------------------------------------------------
-// Browser profile — User-Agent, client hints and locale derived from the
-// browser that is actually launched, so the headers do not contradict what
-// the page can read from JavaScript (navigator.userAgent, userAgentData,
-// navigator.language, Intl timezone).
+// HTTP fallback profiles and browser locale. Browser-backed requests keep their
+// native UA and client hints, avoiding contradictions on Edge, Brave and Opera.
 // ---------------------------------------------------------------------------
 
 const (
@@ -37,29 +36,64 @@ type browserProfile struct {
 	Headers map[string]string
 }
 
-// profileLocale returns the browser locale: FYC_CRAWL_LOCALE if valid,
-// otherwise en-US.
+// Explicit malformed overrides retain deterministic defaults; absent overrides
+// inherit the user's locale and timezone where an IANA name is available.
 func profileLocale() string {
-	if v := strings.TrimSpace(os.Getenv("FYC_CRAWL_LOCALE")); v != "" && reLocale.MatchString(v) {
-		return v
+	if v := strings.TrimSpace(os.Getenv("FYC_CRAWL_LOCALE")); v != "" {
+		if reLocale.MatchString(v) {
+			return v
+		}
+		return defaultLocale
+	}
+	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+		if value := os.Getenv(key); value != "" {
+			return systemLocale(value)
+		}
 	}
 	return defaultLocale
 }
 
-// profileTimezone returns the IANA timezone: FYC_CRAWL_TIMEZONE if it looks
-// valid, otherwise UTC.
+func systemLocale(value string) string {
+	value, _, _ = strings.Cut(value, ".")
+	value, _, _ = strings.Cut(value, "@")
+	value = strings.ReplaceAll(value, "_", "-")
+	if reLocale.MatchString(value) && value != "POSIX" {
+		return value
+	}
+	return defaultLocale
+}
+
+func validTimezone(value string) bool {
+	if !reTimezone.MatchString(value) || value == "Local" {
+		return false
+	}
+	_, err := time.LoadLocation(value)
+	return err == nil
+}
+
 func profileTimezone() string {
-	if v := strings.TrimSpace(os.Getenv("FYC_CRAWL_TIMEZONE")); v != "" && reTimezone.MatchString(v) {
-		if _, err := time.LoadLocation(v); err == nil {
+	if v := strings.TrimSpace(os.Getenv("FYC_CRAWL_TIMEZONE")); v != "" {
+		if validTimezone(v) {
 			return v
+		}
+		return defaultTimezone
+	}
+	if value := strings.TrimPrefix(os.Getenv("TZ"), ":"); validTimezone(value) {
+		return value
+	}
+	if value := time.Local.String(); validTimezone(value) {
+		return value
+	}
+	if path, err := filepath.EvalSymlinks("/etc/localtime"); err == nil {
+		if _, value, ok := strings.Cut(filepath.ToSlash(path), "/zoneinfo/"); ok && validTimezone(value) {
+			return value
 		}
 	}
 	return defaultTimezone
 }
 
-// buildProfile derives a coherent profile from the version string reported by
-// the launched browser (Browser.Version()), the host OS (runtime.GOOS) and the
-// wanted locale / timezone.
+// buildProfile constructs a browser-like profile for the static HTTP path.
+// It is not used to overwrite the launched browser's native identity.
 func buildProfile(browserVersion, goos, locale, timezone string) browserProfile {
 	major := fallbackChromeMajor
 	if m := reMajorVersion.FindStringSubmatch(browserVersion); m != nil {

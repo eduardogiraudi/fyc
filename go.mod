@@ -18,6 +18,7 @@ require (
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853
 	github.com/jezek/xgb v1.3.1
 	github.com/joho/godotenv v1.5.1
+	github.com/ledongthuc/pdf v0.0.0-20261020125853-5e46805f718e
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/muesli/reflow v0.3.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
@@ -30,7 +31,7 @@ require (
 
 require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/andybalholm/cascadia v1.3.3
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect

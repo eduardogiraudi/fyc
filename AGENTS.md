@@ -15,6 +15,7 @@ fuckyourcli (fyc) is a Go CLI coding agent. Single Go module `fuckyourcli`, Go 1
 - `config/` — persisted configuration (`config.json`, schema-versioned; migrations in `persistence.go`)
 - `config/secrets.go` — secret placeholders (`${VAR}` / `${VAR:-default}`) and the `auth.json` store: resolved at load, secrets migrated out of `config.json` on save; also drops the defensive `.gitignore`/`.fycignore` into the config dir
 - `tools/` — tool implementations and filesystem scanners (ignore, skills, agentsmd)
+- `crawl/` — HTTP-first search/extraction with browser fallback. Playwright URL routes do not intercept redirect hops: keep the browser's validating proxy and DNS-pinned HTTP dialing when changing network code. A shared fetch retains context values but is cancelled only when its last subscriber leaves.
 - `reasoning/` — provider-independent thinking intent plus per-transport wire translation (no I/O; see `reasoning/intent.go` for the model)
 - `models/` — models.dev catalog, a standalone JSON file at `store.ConfigDir()/models.json` (never embedded; refresh with `./update_catalog.sh` or `fuckyourcli models update`); informational, consumed by `/reasoning`
 - `codexversion/` — upstream Codex compatibility version, not fyc's release version; `VERSION` is embedded for offline/plain builds and refreshed before release tags. Build-time HTTP resolution is separate from Go compilation; never require Node or an installed Codex.

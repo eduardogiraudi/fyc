@@ -162,32 +162,25 @@ func executeQuestionaryTool(ctx context.Context, args map[string]any) string {
 }
 
 // executeWebSearchTool handles the "web_search" case.
-func executeWebSearchTool(args map[string]any) string {
-	// The tool is hidden from the model when no browser is available; refuse a
-	// direct call too (e.g. a stale tool list or a sub-agent).
-	if reason := WebSearchBlockReason(); reason != "" {
-		return "error: web search is unavailable: " + reason
-	}
-
+func executeWebSearchTool(ctx context.Context, args map[string]any) string {
 	input, ok := args["input"].(string)
 	if !ok {
 		return "error: input argument required"
 	}
-
 	engine, _ := args["engine"].(string)
-	if engine == "" {
-		engine = "startpage"
-	}
-
 	find, _ := args["find"].(string)
-
-	result, err := crawl.CrawlPagedOpts(input, engine, crawl.PagedOptions{
-		Page:     intArg(args, "page"),
-		MaxChars: intArg(args, "max_chars"),
-		Find:     find,
+	region, _ := args["region"].(string)
+	language, _ := args["language"].(string)
+	result, err := crawl.CrawlPagedOptsContext(ctx, input, engine, crawl.PagedOptions{
+		Page:       intArg(args, "page"),
+		MaxChars:   intArg(args, "max_chars"),
+		Find:       find,
+		SearchPage: intArg(args, "search_page"),
+		Region:     region,
+		Language:   language,
 	})
 	if err != nil {
-		return fmt.Sprintf("error executing crawler: %v", err)
+		return crawl.ErrorResult(err)
 	}
 	return result
 }

@@ -19,9 +19,6 @@
       loadTimes: () => {},
       csi: () => {},
     };
-    w.console.debug = () => {};
-    w.console.log = () => {};
-    w.console.context = () => {};
     w.navigator.permissions.query = new Proxy(navigator.permissions.query, {
       apply: async function (target, thisArg, args) {
         try {
@@ -35,18 +32,6 @@
         }
       },
     });
-    Element.prototype._addEventListener = Element.prototype.addEventListener;
-    Element.prototype.addEventListener = function () {
-      let args = [...arguments];
-      let temp = args[1];
-      args[1] = function () {
-        let args2 = [...arguments];
-        args2[0] = Object.assign({}, args2[0]);
-        args2[0].isTrusted = true;
-        return temp(...args2);
-      };
-      return this._addEventListener(...args);
-    };
   };
   const cloudflareClicker = (w) => {
     if (w?.document && w.location.host === "challenges.cloudflare.com") {

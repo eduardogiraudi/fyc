@@ -69,8 +69,8 @@ type ChatSession struct {
 
 	SubagentToolsSessionEnabled *bool
 	WebSearchSessionOverride    *bool
-	// WebSearchAutoDisabled hides web_search at runtime when no browser was
-	// detected among the configured and built-in paths (mirrors LSP/git).
+	// WebSearchAutoDisabled retains the runtime availability hook; HTTP-backed
+	// web_search no longer depends on the presence of a browser.
 	WebSearchAutoDisabled atomic.Bool
 	LSPToolsAutoDisabled  atomic.Bool
 	// GitToolsAutoDisabled hides every git tool at runtime when the git binary
@@ -251,10 +251,8 @@ func (s *ChatSession) refreshLSPToolAvailability() bool {
 	return old != s.LSPToolsAutoDisabled.Load()
 }
 
-// refreshWebSearchAvailability re-detects the browser executable and reports
-// whether web_search's availability changed. It mirrors the LSP/git runtime
-// layer: web_search is hidden while no browser is found among the configured
-// browser_paths and the built-in locations.
+// refreshWebSearchAvailability reports runtime policy changes. HTTP-backed
+// search stays available without a browser; user tool settings remain separate.
 func (s *ChatSession) refreshWebSearchAvailability() bool {
 	old := s.WebSearchAutoDisabled.Load()
 	s.WebSearchAutoDisabled.Store(tools.WebSearchBlockReason() != "")
@@ -450,11 +448,14 @@ var availableTools = []types.Tool{
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
-					"input":     {Type: "string", Description: "URL or search query string"},
-					"engine":    {Type: "string", Description: "Search engine to use (default: startpage, alternatives: duckduckgo,brave)"},
-					"page":      {Type: "number", Description: "1-based page of the result to return. Use the `next_page` field of a truncated result to read the rest."},
-					"max_chars": {Type: "number", Description: "Maximum characters per page (default 24000, clamped between 2000 and 200000)."},
-					"find":      {Type: "string", Description: "Optional. Case-insensitive term to look for in the whole document. Returns the pages where it appears with short snippets, without the page content. Then call again with `page` set to read the right one."},
+					"input":       {Type: "string", Description: "URL or search query string"},
+					"engine":      {Type: "string", Description: "Search engine (default startpage, falls back to duckduckgo/brave on errors, blocks or empty results)."},
+					"page":        {Type: "number", Description: "1-based document window, not the search-engine page. Use next_page to continue reading."},
+					"search_page": {Type: "number", Description: "Search-engine result page, 1-10 (default 1); independent of document windows."},
+					"region":      {Type: "string", Description: "Optional search region, e.g. it or it-it; best-effort support depends on the engine."},
+					"language":    {Type: "string", Description: "Optional language tag, e.g. it or it-IT; defaults to the system/browser locale."},
+					"max_chars":   {Type: "number", Description: "Maximum characters per document window (default 24000, clamped 2000-200000)."},
+					"find":        {Type: "string", Description: "Case-insensitive search in the whole cached document. Returns matching pages and snippets without content; set page to read a match."},
 				},
 				Required: []string{"input"},
 			},

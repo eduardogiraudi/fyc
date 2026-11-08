@@ -9,7 +9,7 @@ import (
 
 func seed(t *testing.T, url, content string) {
 	t.Helper()
-	cachePut("\x00"+url, content) // engine "" → key "\x00"+input
+	cachePut(documentCacheKey(url, "", PagedOptions{}, networkPolicy{}), content)
 }
 
 func decode(t *testing.T, s string) map[string]any {

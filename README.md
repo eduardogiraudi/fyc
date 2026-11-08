@@ -20,7 +20,7 @@
 - At least one configured provider (a Gemini API key, an OpenAI-compatible / Responses / Anthropic endpoint, or Codex OAuth).
 - Optional, depending on what you use:
   - `git` 2.23+ for the git tools
-  - a local Chromium-based browser for `web_search` (if none is found the tool is hidden automatically; add non-canonical executables to `browser_paths` in the config, or point `FYC_BROWSER_PATH` at the binary)
+  - a local Chromium-based browser only for JavaScript rendering in `web_search`; HTTP search, static pages, JSON, raw text and text-based PDFs work without it (custom binaries: `browser_paths` or `FYC_BROWSER_PATH`)
   - `bwrap` / `bubblewrap` for the sandboxed `sh` on Linux
 - Go `1.25.0`+ only if you build from source. A C toolchain (e.g. `gcc` or `clang`) is recommended on Linux/macOS for the default build to enable the full-fidelity symbol extractor.
 

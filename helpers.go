@@ -89,14 +89,13 @@ func toolImageNotice(s *ChatSession) string {
 	return strings.Join(notices, "\n")
 }
 
-// webSearchNotice returns a user-facing warning when web_search is enabled but
-// no browser was detected, so the tool has been hidden. Empty string otherwise.
+// webSearchNotice reports an availability-policy block, not missing JS rendering.
 func webSearchNotice(s *ChatSession) string {
 	if s == nil || !s.isToolEnabled("web_search") {
 		return ""
 	}
 	if reason := tools.WebSearchBlockReason(); reason != "" {
-		return "web_search disabled: " + reason + ". Set browser_paths in the config to point at your browser executable."
+		return "web_search disabled: " + reason
 	}
 	return ""
 }

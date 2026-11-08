@@ -239,7 +239,7 @@ func main() {
 				if !allLSPToolsUserDisabled() && session.refreshLSPToolAvailability() {
 					changed = true
 				}
-				// web_search is hidden while no browser is available.
+				// HTTP-backed web search keeps its runtime policy hook.
 				if session.refreshWebSearchAvailability() {
 					changed = true
 				}
