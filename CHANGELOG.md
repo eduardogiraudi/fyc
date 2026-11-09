@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-09
+
+### Added
+
+- add /retry to repeat a failed provider request (`2883bfe`).
+- config: make max_media configurable via JSON and UI, defaulting to 10 (`2008591`).
+- crawl: add HTTP-first search, structured results and PDF extraction (`a6116e9`).
+- sandbox: expose GPU device nodes in the Linux sandbox, default on with sandbox.gpu opt-out (`d967909`).
+
+### Fixed
+
+- honor turn cancellation during configured delay (`3ca2d84`).
+- ui: make the diff viewer responsive on large diffs by caching wrapped rows and highlighting instead of recomputing them on every keystroke (`a01506c`).
+- context: count individual images when pruning media (`2008591`).
+- crawl: harden network access and isolate shared-fetch cancellation (`a6116e9`).
 
 ## [1.2.0] - 2026-10-20
 
