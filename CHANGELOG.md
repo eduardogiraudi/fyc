@@ -4,11 +4,6 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Added
-
-- sandbox: expose host GPU render/compute device nodes inside the Linux `bwrap` sandbox (default on; disable with `"sandbox": {"gpu": false}` or CLI Settings → Sandbox GPU).
 
 ## [1.2.0] - 2026-10-20
 
