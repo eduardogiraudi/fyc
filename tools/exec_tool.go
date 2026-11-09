@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"fuckyourcli/config"
 	"fuckyourcli/types"
 )
 
@@ -219,6 +220,7 @@ func executeShTool(ctx context.Context, args map[string]any, restrictedRoot stri
 		DenyEnv:        denyEnvKeys,
 		SecretEnvPairs: secretEnvPairs,
 		CmdStr:         cmd,
+		GPU:            config.Get().Sandbox.GPUEnabled(),
 	}
 
 	result, err := buildSandboxCmd(cmdCtx, scfg)
@@ -383,6 +385,11 @@ func execApprovalDetails(cmd string, persistence bool, restrictedRoot string, rw
 	out = append(out, types.DetailLine{Text: "Workspace root: " + restrictedRoot})
 	out = append(out, detailsSection("Writable inside the sandbox (RW):", types.DetailPath, rw)...)
 	out = append(out, detailsSection("Readable inside the sandbox (RO):", types.DetailPath, ro)...)
+	if config.Get().Sandbox.GPUEnabled() {
+		if gpu := gpuDeviceNodes(); len(gpu) > 0 {
+			out = append(out, detailsSection("GPU devices exposed (config: sandbox.gpu):", types.DetailPath, gpu)...)
+		}
+	}
 	out = append(out, detailsSection("Injected env (.env keys):", types.DetailEnvKey, injected)...)
 	out = append(out, detailsSection("Denied env keys:", types.DetailEnvKey, denied)...)
 	return out

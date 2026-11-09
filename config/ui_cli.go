@@ -26,6 +26,7 @@ func manageCLISettings() {
 			"Status Bar Hook",
 			"System Prompt (persona)",
 			"Browser Paths (web_search)",
+			fmt.Sprintf("Sandbox GPU, Linux only (current: %s)", onOff(config.Sandbox.GPUEnabled())),
 			fmt.Sprintf("Max Media (current: %d)", EffectiveMaxMedia()),
 			"← Back",
 		})
@@ -44,13 +45,41 @@ func manageCLISettings() {
 		case 5:
 			manageBrowserPaths()
 		case 6:
-			manageMaxMedia()
+			manageSandboxGPU()
 		case 7:
+			manageMaxMedia()
+		case 8:
 			return
 		case ui.SelectorCanceled:
 			return // q / Ctrl+C: leave the CLI Settings menu
 		}
 	}
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+// manageSandboxGPU toggles GPU device passthrough into the Linux `sh` sandbox
+// (config: "sandbox": {"gpu": false} disables it; default is on).
+func manageSandboxGPU() {
+	idx := ui.SelectOption("Expose GPU devices in the sh sandbox (Linux)", []string{
+		"On (default): CUDA / Vulkan / OpenCL / ROCm work inside sh",
+		"Off: strictest isolation, no GPU inside sh",
+		"← Back",
+	})
+	if idx != 0 && idx != 1 {
+		return
+	}
+	SetSandboxGPU(idx == 0)
+	if err := SaveE(); err != nil {
+		fmt.Println(ui.ErrorStyle.Render("Could not save sandbox GPU setting: " + err.Error()))
+		return
+	}
+	fmt.Println(ui.OkStyle.Render("Sandbox GPU: " + onOff(idx == 0)))
 }
 
 func manageMaxMedia() {

@@ -52,6 +52,10 @@ func buildLinuxSandboxCmd(ctx context.Context, cfg sandboxConfig) (sandboxResult
 		}
 	}
 	args = append(args, "--dev", "/dev") // ← NOT --dev-bind
+	// GPU nodes must be bound AFTER --dev, which mounts a fresh /dev over anything earlier.
+	if cfg.GPU {
+		args = append(args, gpuBindArgs(gpuDeviceNodes())...)
+	}
 	args = append(args, "--proc", "/proc")
 	args = append(args, "--", "sh", "-c", cfg.CmdStr)
 

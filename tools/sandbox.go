@@ -14,6 +14,7 @@ type sandboxConfig struct {
 	DenyEnv        []string // env var names to strip from child process
 	SecretEnvPairs []string // "KEY=VALUE" injected into child env (passed but redacted from output)
 	CmdStr         string   // shell command to execute
+	GPU            bool     // Linux only: expose host GPU device nodes (see sandbox_gpu_linux.go)
 }
 
 // sandboxResult wraps cmd + cleanup (e.g., removing profile file on Darwin).

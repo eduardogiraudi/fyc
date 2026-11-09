@@ -207,6 +207,8 @@ type Config struct {
 	BrowserPaths []string `json:"browser_paths,omitempty"`
 	// Crawl holds the network policy for HTTP and browser-backed crawling.
 	Crawl CrawlConfig `json:"crawl,omitempty"`
+	// Sandbox holds the opt-out switches of the `sh` command sandbox (see config/sandbox.go).
+	Sandbox SandboxConfig `json:"sandbox,omitempty"`
 	// rawSecrets holds the on-disk expression of every secret field captured at
 	// load time (see config/secrets.go). It is never persisted: SaveE uses it to
 	// keep an untouched ${VAR} placeholder instead of overwriting it with a
