@@ -25,6 +25,12 @@ type SubagentConfig struct {
 	ID            string // unique identifier for multi-agent scenarios
 }
 
+// subagentStream runs one sub-agent sampling request, resending it when it fails
+// before producing any visible output: a sub-agent has no manual /retry.
+func subagentStream(provider types.Provider, ctx context.Context, messages []types.Message, tools []types.Tool, sink types.OutputSink) (*types.StreamResult, error) {
+	return providers.WithStreamResend(providers.WithLogging(provider)).StreamChat(ctx, messages, tools, sink)
+}
+
 // RunSubagent spawns a sub-agent in the given subdirectory with a custom
 // system prompt and a filtered toolset. It inherits ignore rules from the
 // parent and runs the same provider/model as the main agent.
@@ -155,7 +161,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 					geminiHistory = append(geminiHistory, m)
 				}
 			}
-			result, err = providers.WithLogging(provider).StreamChat(ctx, geminiHistory, allowedToolDefs, sink)
+			result, err = subagentStream(provider, ctx, geminiHistory, allowedToolDefs, sink)
 		} else if cfgProvider.Provider == config.ProviderAnthropic {
 			// Find active Anthropic provider
 			var activeProvider *config.OpenAICompatibleProviderConfig
@@ -186,7 +192,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 				cfgProvider.Temperature,
 			)
 			provider.SetReasoning(subIntent, subOverride)
-			result, err = providers.WithLogging(provider).StreamChat(ctx, subHistory, allowedToolDefs, sink)
+			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
 		} else if cfgProvider.Provider == config.ProviderCodex {
 			codexToken, tokenErr := config.CodexFreshAccessToken()
 			if tokenErr != nil {
@@ -201,7 +207,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 			)
 			provider.SetReasoning(subIntent, subOverride)
 			provider.Refresh = config.CodexForceRefresh
-			result, err = providers.WithLogging(provider).StreamChat(ctx, subHistory, allowedToolDefs, sink)
+			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
 		} else if cfgProvider.Provider == config.ProviderOpenAIResponsesCompatible {
 			var activeProvider *config.OpenAICompatibleProviderConfig
 			for _, p := range cfgProvider.OpenAIResponsesCompatibleProviders {
@@ -223,7 +229,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 				"",
 			)
 			provider.SetReasoning(subIntent, subOverride)
-			result, err = providers.WithLogging(provider).StreamChat(ctx, subHistory, allowedToolDefs, sink)
+			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
 		} else {
 			// Find active OpenAI-compatible provider
 			var activeProvider *config.OpenAICompatibleProviderConfig
@@ -247,7 +253,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 				"",
 			)
 			provider.SetReasoning(subIntent, subOverride)
-			result, err = providers.WithLogging(provider).StreamChat(ctx, subHistory, allowedToolDefs, sink)
+			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
 		}
 
 		if err != nil {

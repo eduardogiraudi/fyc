@@ -185,6 +185,15 @@ func retryAfterDelay(resp *http.Response) (time.Duration, bool) {
 // attempt. It reports false when ctx is cancelled first, and updates the sink
 // spinner so the user sees why the CLI is waiting.
 func waitRetry(ctx context.Context, sink types.OutputSink, attempt int, delay time.Duration, reason string) bool {
+	return waitWithLabel(ctx, sink, delay, func(d time.Duration) string {
+		return fmt.Sprintf("retrying %s (%d/%d) in %s...", reason, attempt+1, maxRetryAttempts, d.Round(100*time.Millisecond))
+	})
+}
+
+// waitWithLabel sleeps for delay (bounded by the context deadline) before the
+// next attempt. The label is computed from the delay actually waited, since the
+// deadline may shorten it. It reports false when ctx is cancelled first.
+func waitWithLabel(ctx context.Context, sink types.OutputSink, delay time.Duration, label func(time.Duration) string) bool {
 	if delay < 0 {
 		delay = 0
 	}
@@ -211,8 +220,7 @@ func waitRetry(ctx context.Context, sink types.OutputSink, attempt int, delay ti
 	}
 
 	if sink != nil {
-		sink.StartSpinner(fmt.Sprintf("retrying %s (%d/%d) in %s...",
-			reason, attempt+1, maxRetryAttempts, delay.Round(100*time.Millisecond)))
+		sink.StartSpinner(label(delay))
 	}
 
 	timer := time.NewTimer(delay)

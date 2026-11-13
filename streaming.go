@@ -52,7 +52,8 @@ func streamProviderChat(s *ChatSession, opts streamOptions) {
 }
 
 func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, provider types.Provider, respond compactionResponder) {
-	provider = providers.WithLogging(provider)
+	// Resending sits outside the logger so every attempt is logged on its own.
+	provider = providers.WithStreamResend(providers.WithLogging(provider))
 	sink := chatSink(s)
 	instruction := ""
 	if opts.retryFirstRequest && s.retryRequest != nil {

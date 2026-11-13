@@ -44,7 +44,7 @@ func (r *streamRequest) expire() {
 		r.timer.Reset(remaining)
 		return
 	}
-	r.cancel(fmt.Errorf("provider stream idle for %s: %w", r.idle, context.DeadlineExceeded))
+	r.cancel(&streamIdleError{idle: r.idle})
 }
 
 func (r *streamRequest) touch() {

@@ -327,6 +327,15 @@ Inside the chat:
 | `/tutorial <question>` | Answer a question about using fyc with embedded documentation and no agent tools. Use `/mode tutorial` for a persistent tutorial conversation. |
 | `exit` or `/exit` | Exit and save chat history. |
 
+## Automatic retry
+
+Two layers retry automatically, both bounded and both visible on the spinner as `retrying ... (n/N) in ...`:
+
+- **HTTP request** (`providers/http_client.go`): connection errors and `429`/`503`/`529` responses are retried up to 4 attempts with exponential backoff (1s → 2s → 4s, capped at 15s), honouring `Retry-After`, `retry-after-ms` and `x-ratelimit-reset-*`. Each attempt replays the request body and a failed connection pool is retired, so a retry never rides a dead socket. Ctrl+C aborts the wait immediately.
+- **Sampling request** (`providers.MaxStreamResends`, 2 resends): if a request fails before producing any visible output — the provider goes idle for its inactivity budget (120–240s, renewed by response body bytes) or the connection drops mid-response — the same request is resent with the same backoff. History is untouched and no tool has run at that point, so nothing is duplicated. This applies to the chat loop and to sub-agents (which have no manual `/retry`); compaction keeps its own fallback policy.
+
+Once text, reasoning or a provisional diff has been shown, the stream is partially consumed and is never replayed (a streamed answer becomes completed output in the TUI and has already left for AG-UI clients). Protocol failures, API errors and a user cancellation are never resent. The error is surfaced and the manual retry below takes over.
+
 ## Manual retry
 
 After a provider error, `/retry` starts a fresh request from the last sampling boundary, not from the start of the user turn or the last streamed event. The original user prompt and all completed tool calls/results remain in context; `/retry` is not sent as a new user message. Tools already executed are not replayed, but the model can request new tools after the retry succeeds.
