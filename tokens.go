@@ -10,7 +10,6 @@ package main
 import (
 	"encoding/json"
 	"math"
-	"unicode/utf8"
 
 	"fuckyourcli/config"
 	"fuckyourcli/types"
@@ -30,8 +29,16 @@ func estimateTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	runes := utf8.RuneCountInString(text)
-	tokens := int(math.Ceil(float64(runes) / float64(charsPerToken)))
+	// CJK, kana, Hangul and emoji cost about one token per character, far above
+	// the Latin ratio; ASCII and accented Latin keep the plain estimate.
+	runes, wide := 0, 0
+	for _, r := range text {
+		runes++
+		if r >= 0x2E80 {
+			wide++
+		}
+	}
+	tokens := int(math.Ceil(float64(runes-wide)/float64(charsPerToken))) + wide
 	if tokens < 1 {
 		tokens = 1
 	}
