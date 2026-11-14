@@ -532,7 +532,7 @@ loop:
 	result.ReasoningContent = fullReasoning.String()
 	// Some compatible servers omit terminal metadata on text-only responses.
 	if !sawTerminal && (!allowUnmarkedEOF || strings.TrimSpace(result.Content) == "") {
-		return nil, fmt.Errorf("chat completions stream ended before a terminal event (incomplete response)")
+		return nil, transientStream(fmt.Errorf("chat completions stream ended before a terminal event (incomplete response)"))
 	}
 	if len(toolCallBuilders) != 0 {
 		return nil, fmt.Errorf("chat completions stream ended with an incomplete tool call")

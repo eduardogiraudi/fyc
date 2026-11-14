@@ -835,7 +835,7 @@ loop:
 		}
 	}
 	if !sawTerminal {
-		return nil, fmt.Errorf("responses stream ended before a terminal event (incomplete response)")
+		return nil, transientStream(fmt.Errorf("responses stream ended before a terminal event (incomplete response)"))
 	}
 	for _, ptc := range order {
 		if ptc.resultIndex < 0 {

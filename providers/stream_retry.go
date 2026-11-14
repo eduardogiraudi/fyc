@@ -17,6 +17,28 @@ import (
 // expiring before the provider finished the response.
 var ErrStreamIdle = errors.New("provider stream idle")
 
+// ErrStreamTransient marks a failure that happened inside an already accepted
+// stream but says nothing about the request itself: the provider reported an
+// overload/internal error as an in-band event, or the stream was cut off before
+// its terminal event. Like an idle provider, it is safe to resend while nothing
+// has been shown to the user.
+var ErrStreamTransient = errors.New("provider stream failed transiently")
+
+// transientStreamError tags err as ErrStreamTransient without changing its
+// message, so logs and the error shown to the user stay exactly as before.
+type transientStreamError struct{ err error }
+
+func (e *transientStreamError) Error() string   { return e.err.Error() }
+func (e *transientStreamError) Unwrap() []error { return []error{e.err, ErrStreamTransient} }
+
+// transientStream wraps err so StreamResendRetryable accepts it.
+func transientStream(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &transientStreamError{err: err}
+}
+
 // streamIdleError reports an idle provider without losing the identity of a
 // wrapped context.DeadlineExceeded (the compaction fallback and the turn-level
 // cancellation checks rely on it) while adding ErrStreamIdle so a resend can be
@@ -32,10 +54,11 @@ func (e *streamIdleError) Unwrap() []error {
 }
 
 // MaxStreamResends bounds the extra sampling requests attempted when a request
-// fails before producing any output. The budget is deliberately small: a wedged
-// backend desynchronizes the conversation when it finally answers, and the user
-// is waiting on a spinner the whole time.
-const MaxStreamResends = 2
+// fails before producing any output. The budget stays smaller than the HTTP one:
+// every resend is a full sampling request, a wedged backend desynchronizes the
+// conversation when it finally answers, and the user is waiting on a spinner
+// the whole time.
+const MaxStreamResends = 3
 
 // StreamResendRetryable reports whether a failed sampling request may be
 // resent because the failure is connection-level: the provider went idle, or the
@@ -48,7 +71,7 @@ func StreamResendRetryable(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
-	if errors.Is(err, ErrStreamIdle) {
+	if errors.Is(err, ErrStreamIdle) || errors.Is(err, ErrStreamTransient) {
 		return true
 	}
 	var urlErr *url.Error
@@ -72,8 +95,9 @@ func isStreamTransportError(err error) bool {
 	return errors.As(err, &netErr)
 }
 
-// StreamResendDelay returns the backoff before the given 1-based resend,
-// mirroring the HTTP retry policy so both layers feel the same.
+// StreamResendDelay returns the base backoff before the given 1-based resend,
+// mirroring the HTTP retry policy so both layers feel the same. The caller
+// applies jitter.
 func StreamResendDelay(resend int) time.Duration {
 	delay := initialRetryBackoff
 	for i := 1; i < resend; i++ {
@@ -83,10 +107,11 @@ func StreamResendDelay(resend int) time.Duration {
 }
 
 // WaitStreamResend shows why the request is being resent and sleeps before the
-// next attempt. It reports false when the context was cancelled first.
+// next attempt, counting the remaining time down on the sink. It reports false
+// when the context was cancelled first.
 func WaitStreamResend(ctx context.Context, sink types.OutputSink, resend int, delay time.Duration, reason string) bool {
 	return waitWithLabel(ctx, sink, delay, func(d time.Duration) string {
-		return fmt.Sprintf("retrying after %s (%d/%d) in %s...", reason, resend, MaxStreamResends, d.Round(100*time.Millisecond))
+		return fmt.Sprintf("retrying after %s (%d/%d) in %s...", reason, resend, MaxStreamResends, formatWait(d))
 	})
 }
 
@@ -160,11 +185,25 @@ func (p *resendProvider) StreamChat(ctx context.Context, messages []types.Messag
 			return result, err
 		}
 		reason := "network error"
-		if errors.Is(err, ErrStreamIdle) {
+		switch {
+		case errors.Is(err, ErrStreamIdle):
 			reason = "provider idle"
+		case errors.Is(err, ErrStreamTransient):
+			reason = "provider error"
 		}
-		if !WaitStreamResend(ctx, sink, resend+1, StreamResendDelay(resend+1), reason) {
+		if !WaitStreamResend(ctx, sink, resend+1, withJitter(StreamResendDelay(resend+1)), reason) {
 			return nil, context.Cause(ctx)
 		}
 	}
+}
+
+// isTransientAnthropicErrorType reports whether an in-band Anthropic stream
+// error is load shedding or an internal failure that a resend can outlive.
+// Request errors (invalid_request_error, authentication_error, ...) are not.
+func isTransientAnthropicErrorType(t string) bool {
+	switch t {
+	case "overloaded_error", "api_error", "rate_limit_error", "timeout_error":
+		return true
+	}
+	return false
 }

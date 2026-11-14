@@ -193,12 +193,15 @@ func TestRetryAfterDelayParsing(t *testing.T) {
 }
 
 func TestIsRetryableStatus(t *testing.T) {
-	for _, code := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable, 529} {
+	for _, code := range []int{
+		http.StatusTooManyRequests, http.StatusServiceUnavailable, 529,
+		http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout,
+	} {
 		if !isRetryableStatus(code) {
 			t.Errorf("status %d should be retryable", code)
 		}
 	}
-	for _, code := range []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusInternalServerError} {
+	for _, code := range []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusNotImplemented, http.StatusHTTPVersionNotSupported} {
 		if isRetryableStatus(code) {
 			t.Errorf("status %d should not be retryable", code)
 		}

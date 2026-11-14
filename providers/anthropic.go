@@ -712,7 +712,11 @@ loop:
 					result.CacheWriteTokens = event.Usage.CacheCreationInputTokens
 				}
 			case "error":
-				return nil, fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
+				err := fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
+				if isTransientAnthropicErrorType(event.Error.Type) {
+					err = transientStream(err)
+				}
+				return nil, err
 			case "message_stop":
 				sawMessageStop = true
 				break loop
@@ -729,7 +733,7 @@ loop:
 	// this check the empty FinishReason made the caller treat it as a normally
 	// completed turn, so the CLI silently returned to the prompt mid-answer.
 	if !sawMessageStop {
-		return nil, fmt.Errorf("anthropic stream ended before message_stop (incomplete response, %d chars of text received)", fullContent.Len())
+		return nil, transientStream(fmt.Errorf("anthropic stream ended before message_stop (incomplete response, %d chars of text received)", fullContent.Len()))
 	}
 
 	// stop_reason values that mean "the model produced nothing usable".

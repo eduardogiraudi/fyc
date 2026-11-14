@@ -531,7 +531,7 @@ loop:
 	result.ReasoningContent = fullReasoning.String()
 	result.ReasoningSignature = lastTextThoughtSig
 	if !sawTerminal {
-		return nil, fmt.Errorf("gemini stream ended before a terminal event (incomplete response)")
+		return nil, transientStream(fmt.Errorf("gemini stream ended before a terminal event (incomplete response)"))
 	}
 	return result, nil
 }

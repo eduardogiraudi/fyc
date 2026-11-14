@@ -4,3 +4,6 @@ build/*
 ignore/
 .ignore/
 tmp_probe/
+
+# fycui GUI: experimental spike, not ready yet — keep it out of the repo until stable
+gui/

@@ -66,7 +66,7 @@ func TestStreamResendRetryable(t *testing.T) {
 }
 
 func TestStreamResendDelayMirrorsHTTPPolicy(t *testing.T) {
-	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, maxRetryBackoff, maxRetryBackoff}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, maxRetryBackoff, maxRetryBackoff}
 	for i, d := range want {
 		if got := StreamResendDelay(i + 1); got != d {
 			t.Fatalf("StreamResendDelay(%d) = %s, want %s", i+1, got, d)

@@ -155,6 +155,12 @@ func TestProviderStreamActivityAndCancellation(t *testing.T) {
 						if err != nil || result == nil || !result.Interrupted || len(result.ToolCalls) != 0 || elapsed != time.Second {
 							t.Fatalf("cancel: elapsed=%s, result=%+v, err=%v", elapsed, result, err)
 						}
+					case "retry_wait":
+						// A server-advertised wait beyond maxRetryAfter is not sat
+						// through: the provider's own 429 surfaces at once.
+						if err == nil || !strings.Contains(err.Error(), "429") || result != nil || elapsed != 0 || parent.Err() != nil {
+							t.Fatalf("retry wait: elapsed=%s, result=%+v, err=%v", elapsed, result, err)
+						}
 					default:
 						limit := 4 * time.Minute
 						if fixture.name == "gemini" {
