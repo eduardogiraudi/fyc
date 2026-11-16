@@ -639,7 +639,7 @@ loop:
 			if sl.done {
 				if sl.err != nil {
 					sink.Finalize()
-					return nil, fmt.Errorf("responses stream interrupted: %w", sl.err)
+					return nil, transientStream(fmt.Errorf("responses stream interrupted: %w", sl.err))
 				}
 				break loop
 			}

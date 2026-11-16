@@ -515,6 +515,13 @@ func TestParseCodexStreamMarksTransientFailures(t *testing.T) {
 	if err == nil || errors.Is(err, ErrStreamTransient) || errors.Is(err, ErrStreamRateLimit) {
 		t.Fatalf("an exhausted quota must not be retried: %v", err)
 	}
+
+	connectionLost := errors.New("http2: client connection lost")
+	body := nopCloser{&errReader{err: connectionLost}}
+	_, err = parseCodexStreamResponse(context.Background(), body, false, NewSilentOutputSink())
+	if !errors.Is(err, ErrStreamTransient) || !errors.Is(err, connectionLost) {
+		t.Fatalf("a lost HTTP/2 connection must be resendable without losing its cause: %v", err)
+	}
 }
 
 func TestWithStreamResendResendsTransientFailures(t *testing.T) {
