@@ -295,13 +295,13 @@ func buildSystemPrompt(today, userPreferences string, s *ChatSession) string {
 	}
 	if s.toolVisible("get_anchors") && s.toolVisible("replace_anchors") {
 		rules = append(rules, `Editing existing files:
-  1. get_anchors → reads file with anchor-annotated lines (Word:hash§content, § = display separator, not part of the anchor)
-  2. replace_anchors(path, start_anchor, end_anchor, replacement) → replaces the range from start_anchor to end_anchor INCLUSIVE.
+  1. get_anchors → reads the file as anchor§content lines (anchor = short opaque token such as k7fwd; § only separates it from the content)
+  2. replace_anchors(path, start_anchor, end_anchor, replacement) → replaces the range from start_anchor to end_anchor INCLUSIVE. Pass each anchor whole, exactly as printed.
      • After an edit, consumed anchors are gone — use only anchors from the "new anchors:" response
      • Single line replace: start_anchor = end_anchor = that line's anchor
      • Delete range: replacement = ""
      • Insert after line: both anchors = that line, include original line content first in replacement
-Note: The anchor word might be a deterministic combination of two words (e.g., WordWord:hash). Treat it as a single opaque identifier. Do not attempt to split or reconstruct these identifiers; they are generated automatically when the anchor pool is exhausted.
+Anchors are opaque: never guess, build, shorten or retype them; copy only anchors that tools returned, character for character.
 Never use write on existing files.`)
 	} else if s.toolVisible("write") {
 		rules = append(rules, "write is intended for new files. Avoid using it for existing files.")
@@ -319,8 +319,8 @@ Never use write on existing files.`)
 	)
 	if s.toolVisible("get_anchors") && s.toolVisible("replace_anchors") {
 		failureRules = append(failureRules,
-			"• replace_anchors anchor not found: re-read with get_anchors, do not guess anchors",
-			"• replace_anchors stale-file conflict: re-read with get_anchors and reconsider the patch using the current content. Preserve external/user edits; never bypass the conflict with write or sh.",
+			"• replace_anchors anchor not found or malformed: re-read with get_anchors and copy the anchor exactly as printed, do not guess or retype anchors",
+			"• replace_anchors stale anchor or changed neighbours (\"expected … but got …\"): nothing was written. The message shows the current lines and their new anchors — reconsider the patch against them and retry (re-read with get_anchors if the file changed a lot). Preserve external/user edits; never bypass the conflict with write or sh.",
 		)
 	}
 	rules = append(rules, "Tool failures:\n  "+strings.Join(failureRules, "\n  "))

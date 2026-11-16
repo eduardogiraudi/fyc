@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -70,21 +71,29 @@ func assertAnchorFile(t *testing.T, path, want string) {
 	}
 }
 
-func TestReplaceAnchorsRejectsExternalChanges(t *testing.T) {
+var nowAnchorRe = regexp.MustCompile(`\(now ([a-z0-9]+)\)`)
+
+func TestReplaceAnchorsExternalChanges(t *testing.T) {
+	const original = "first\ntarget\nlast\n"
 	for _, tc := range []struct {
 		name, external, replacement string
+		// target: the anchored line itself changed; neighbour: only a bordering line changed;
+		// newline: only the final newline changed.
+		kind string
+		want string // expected substring of the refusal
 	}{
-		{"target", "first\nuser\nlast\n", "agent"},
-		{"unrelated line", "user\ntarget\nlast\n", "agent"},
-		{"insertion", "first\ninserted\ntarget\nlast\n", "agent"},
-		{"deletion", "target\nlast\n", "agent"},
-		{"whitespace", "first\n  target\nlast\n", "agent"},
-		{"final newline", "first\ntarget\nlast", "agent"},
-		{"line endings", "first\r\ntarget\r\nlast\r\n", "agent"},
-		{"stale no-op", "user\ntarget\nlast\n", "target"},
+		{"target changed", "first\nuser\nlast\n", "agent", "target", `expected "target" but got "user"`},
+		{"target removed", "first\nlast\n", "agent", "target", `line removed on disk: expected "target"`},
+		{"whitespace", "first\n  target\nlast\n", "agent", "target", `but got "  target"`},
+		{"line endings", "first\r\ntarget\r\nlast\r\n", "agent", "target", `expected "target"`},
+		{"unrelated line", "user\ntarget\nlast\n", "agent", "neighbour", "neighbouring lines changed on disk"},
+		{"insertion", "first\ninserted\ntarget\nlast\n", "agent", "neighbour", "inserted"},
+		{"deletion", "target\nlast\n", "agent", "neighbour", "neighbouring lines changed on disk"},
+		{"stale no-op", "user\ntarget\nlast\n", "target", "neighbour", "neighbouring lines changed on disk"},
+		{"final newline", "first\ntarget\nlast", "agent", "newline", "get_anchors again"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, path := setupAnchorFile(t, "first\ntarget\nlast\n")
+			root, path := setupAnchorFile(t, original)
 			anchor := readAnchorToken(t, root, 1)
 			writeAnchorTestFile(t, path, tc.external)
 			called := false
@@ -93,23 +102,146 @@ func TestReplaceAnchorsRejectsExternalChanges(t *testing.T) {
 				return InteractionResponse{Choice: req.AllowIndex}, nil
 			}))
 			res := patchAnchorFile(context.Background(), root, anchor, tc.replacement)
-			if !types.ToolResultFailed(res) || !strings.Contains(res, "file changed on disk") || !strings.Contains(res, "get_anchors again") {
-				t.Fatalf("expected actionable conflict, got %s", res)
+			if !types.ToolResultFailed(res) || !strings.Contains(res, "on disk") || !strings.Contains(res, tc.want) || !strings.Contains(res, "no changes written") {
+				t.Fatalf("expected actionable conflict containing %q, got %s", tc.want, res)
 			}
 			if called {
 				t.Fatal("stale diff was offered for approval")
 			}
 			assertAnchorFile(t, path, tc.external)
-			if _, err := globalAnchorState.GetAnnotated(path); err == nil {
-				t.Fatal("conflict must invalidate the cached file, not silently refresh it")
-			}
-			fresh := readAnchorToken(t, root, 0)
-			res = patchAnchorFile(context.Background(), root, fresh, "reconsidered")
-			if !strings.HasPrefix(res, "updated") {
-				t.Fatalf("patch after explicit re-read: %s", res)
+
+			switch tc.kind {
+			case "newline":
+				if _, err := globalAnchorState.GetAnnotated(path); err == nil {
+					t.Fatal("a final-newline conflict must drop the cache and require a re-read")
+				}
+				fresh := readAnchorToken(t, root, 1)
+				if res = patchAnchorFile(context.Background(), root, fresh, "reconsidered"); !strings.HasPrefix(res, "updated") {
+					t.Fatalf("patch after explicit re-read: %s", res)
+				}
+			case "neighbour":
+				// The warning is shown once; the same anchor then works without a re-read.
+				res = patchAnchorFile(context.Background(), root, anchor, tc.replacement)
+				if !strings.HasPrefix(res, "updated") && !strings.HasPrefix(res, "no changes needed") {
+					t.Fatalf("retry after the neighbour warning: %s", res)
+				}
+			case "target":
+				// A retired anchor stays refused, and the refusal names the way forward.
+				if again := patchAnchorFile(context.Background(), root, anchor, tc.replacement); !types.ToolResultFailed(again) {
+					t.Fatalf("retired anchor accepted on retry: %s", again)
+				}
+				fresh := ""
+				if m := nowAnchorRe.FindStringSubmatch(res); m != nil {
+					fresh = m[1]
+				} else {
+					fresh = readAnchorToken(t, root, 1)
+				}
+				if res = patchAnchorFile(context.Background(), root, fresh, "reconsidered"); !strings.HasPrefix(res, "updated") {
+					t.Fatalf("patch with the anchor from the refusal: %s", res)
+				}
 			}
 		})
 	}
+}
+
+func TestReplaceAnchorsDistantExternalChangeDoesNotBlock(t *testing.T) {
+	root, path := setupAnchorFile(t, "a\nb\ntarget\nd\ne\n")
+	anchor := readAnchorToken(t, root, 2)
+	writeAnchorTestFile(t, path, "A\nb\ntarget\nd\ne\n")
+	if res := patchAnchorFile(context.Background(), root, anchor, "agent"); !strings.HasPrefix(res, "updated") {
+		t.Fatalf("an unrelated external edit away from the target must not block the patch: %s", res)
+	}
+	assertAnchorFile(t, path, "A\nb\nagent\nd\ne\n")
+}
+
+func TestReplaceAnchorsWritesSeparatorContentVerbatim(t *testing.T) {
+	for _, tc := range []struct{ name, replacement string }{
+		{"leading separator", "§ Section 3"},
+		{"separator in a string", `x := "a § b"`},
+		{"lone separator", "§"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, path := setupAnchorFile(t, "first\ntarget\nlast\n")
+			anchor := readAnchorToken(t, root, 1)
+			if res := patchAnchorFile(context.Background(), root, anchor, tc.replacement); !strings.HasPrefix(res, "updated") {
+				t.Fatalf("patch failed: %s", res)
+			}
+			assertAnchorFile(t, path, "first\n"+tc.replacement+"\nlast\n")
+		})
+	}
+}
+
+func TestReplaceAnchorsStripsCopiedPrefixes(t *testing.T) {
+	root, path := setupAnchorFile(t, "first\ntarget\nlast\n")
+	first := readAnchorToken(t, root, 0)
+	target := readAnchorToken(t, root, 1)
+	res := executeReplaceAnchorsTool(context.Background(), map[string]any{
+		"path": "file.txt", "start_anchor": first, "end_anchor": target,
+		"replacement": first + "§first\n§ added\nnew",
+	}, root, nil)
+	if !strings.HasPrefix(res, "updated") {
+		t.Fatalf("patch failed: %s", res)
+	}
+	assertAnchorFile(t, path, "first\n§ added\nnew\nlast\n")
+}
+
+func TestGetAnchorsPrintsTokensWithCheckCharacters(t *testing.T) {
+	root, _ := setupAnchorFile(t, "first\ntarget\nlast\n")
+	out := executeGetAnchorsTool(map[string]any{"path": "file.txt"}, root, nil)
+	for i, line := range strings.Split(out, "\n") {
+		tok, _, ok := strings.Cut(line, anchorDelimiter)
+		if !ok {
+			t.Fatalf("line %d has no separator: %q", i, line)
+		}
+		if _, valid := splitAnchorToken(tok); !valid {
+			t.Fatalf("line %d: %q is not a token with a valid check", i, tok)
+		}
+	}
+}
+
+func TestReplaceAnchorsRefusesWrongCheckCharacters(t *testing.T) {
+	root, path := setupAnchorFile(t, "first\ntarget\nlast\n")
+	tok := readAnchorToken(t, root, 1)
+	id := tok[:len(tok)-anchorCheckLen]
+	called := false
+	SetInteractor(anchorApprovalFunc(func(_ context.Context, req InteractionRequest) (InteractionResponse, error) {
+		called = true
+		return InteractionResponse{Choice: req.AllowIndex}, nil
+	}))
+	for name, bad := range map[string]string{
+		"wrong check":      id + wrongCheck(id),
+		"id only":          id,
+		"truncated token":  tok[:len(tok)-1],
+		"legacy word:hash": "Agate:a3",
+	} {
+		res := patchAnchorFile(context.Background(), root, bad, "agent")
+		if !types.ToolResultFailed(res) || !strings.Contains(res, "no changes written") {
+			t.Fatalf("%s: expected a refusal, got %s", name, res)
+		}
+		assertAnchorFile(t, path, "first\ntarget\nlast\n")
+	}
+	if called {
+		t.Fatal("a refused anchor must never reach the approval prompt")
+	}
+	if res := patchAnchorFile(context.Background(), root, tok, "agent"); !strings.HasPrefix(res, "updated") {
+		t.Fatalf("the right token must work after the refusals: %s", res)
+	}
+	assertAnchorFile(t, path, "first\nagent\nlast\n")
+}
+
+func TestReplaceAnchorsIdenticalLinesKeepTheirOwnAnchors(t *testing.T) {
+	root, path := setupAnchorFile(t, "a\nx\nx\nb\n")
+	first := readAnchorToken(t, root, 1)
+	second := readAnchorToken(t, root, 2)
+
+	if res := patchAnchorFile(context.Background(), root, first, "y"); !strings.HasPrefix(res, "updated") {
+		t.Fatalf("first patch: %s", res)
+	}
+	// The second x was never touched: its anchor must still work, with no re-read.
+	if res := patchAnchorFile(context.Background(), root, second, "z"); !strings.HasPrefix(res, "updated") {
+		t.Fatalf("anchor of the untouched identical line was refused: %s", res)
+	}
+	assertAnchorFile(t, path, "a\ny\nz\nb\n")
 }
 
 func TestReplaceAnchorsRejectsChangesDuringApproval(t *testing.T) {
@@ -228,7 +360,7 @@ func TestReplaceAnchorsCancelledOrDeniedDoesNotWrite(t *testing.T) {
 func TestAnchorStateResetAndExactSnapshot(t *testing.T) {
 	mgr := newTestManager()
 	mgr.EnsureContent("file", "original")
-	if err := mgr.validateContent("file", "original"); err != nil {
+	if err := mgr.syncWithDisk("file", "original"); err != nil {
 		t.Fatal(err)
 	}
 	first, _ := mgr.GetAnnotated("file")
@@ -241,7 +373,7 @@ func TestAnchorStateResetAndExactSnapshot(t *testing.T) {
 	if first == second {
 		t.Fatal("reset reused anchors from the cleared context")
 	}
-	if err := mgr.validateContent("file", "original\n"); err == nil {
+	if err := mgr.syncWithDisk("file", "original\n"); err == nil {
 		t.Fatal("final newline change must invalidate the exact snapshot")
 	}
 }

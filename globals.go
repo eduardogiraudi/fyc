@@ -564,7 +564,7 @@ var availableTools = []types.Tool{
 		Type: "function",
 		Function: types.ToolFunction{
 			Name:        "get_anchors",
-			Description: "Required first step before any edit. Reads a file with word-anchor prefixes \u2014 returns each line as 'WORD:hash\xa7content', e.g. 'Agate:a3\xa7package main'. Unchanged lines keep their anchors across get_anchors calls and successful edits. Any external change to the file makes a patch fail without writing; call get_anchors again and reconsider the patch using the current content. /clear invalidates all cached anchors. Always call this before replace_anchors.\nThe whole file is always cached, but the answer is windowed (at most 2000 lines / 100 KB, announced on the first line): use offset/limit to read the rest, the anchors already returned stay valid.",
+			Description: "Required first step before any edit. Reads a file and returns each line as 'anchor§content', e.g. 'k7fwd§package main': the anchor is a short opaque token and § only separates it from the line. Copy the whole anchor exactly as printed; never retype or shorten it. Unchanged lines keep their anchor across get_anchors calls and successful edits. If the file is changed outside your edits, replace_anchors refuses (without writing) a patch that targets a changed line and tells you what the line was ('expected …') and what it is now ('but got …', with its new anchor); patches on untouched lines keep working. /clear invalidates all cached anchors. Always call this before replace_anchors.\nThe whole file is always cached, but the answer is windowed (at most 2000 lines / 100 KB, announced on the first line): use offset/limit to read the rest, the anchors already returned stay valid.",
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
@@ -580,21 +580,21 @@ var availableTools = []types.Tool{
 		Type: "function",
 		Function: types.ToolFunction{
 			Name: "replace_anchors",
-			Description: `Edit an existing file. CRITICAL: after calling this, the anchors of modified lines are GONE \u2014 use only the new anchors returned in 'new anchors: ...'. Always call get_anchors first to get anchors. The anchor is 'WORD:hash' (the part before the \u00a7 symbol). Never include WORD:hash\u00a7 prefixes in replacement \u2014 plain source code only. Returns newly inserted lines with fresh anchors.
-If the file changed on disk, the patch fails without writing. Re-read with get_anchors and reconsider the patch; never bypass a stale-file conflict with write or sh.
+			Description: `Edit an existing file. CRITICAL: after calling this, the anchors of modified lines are GONE — use only the new anchors returned in 'new anchors: ...'. Always call get_anchors first. start_anchor and end_anchor are the whole anchor (the part before §), e.g. k7fwd. The replacement is plain source code only: never copy 'anchor§' prefixes into it. Returns newly inserted lines with fresh anchors.
+If a line you target changed on disk, or lines next to it did, the patch fails without writing and the error shows the current lines with their new anchors: reconsider the patch and retry (re-read with get_anchors if the file changed a lot). Never bypass a conflict with write or sh.
 Patterns:
 Replace single line: start_anchor=end_anchor=same_line, replacement=new_content
-Delete range: start_anchor=first, end_anchor=last, replacement=\"\" (one call)
+Delete range: start_anchor=first, end_anchor=last, replacement="" (one call)
 Insert after line: both anchors=that line, include original content in replacement before new content
 
-Never loop calling replace_anchors on the same line \u2014 write the final content in one shot.`,
+Never loop calling replace_anchors on the same line — write the final content in one shot.`,
 			Parameters: types.ToolParameters{
 				Type: "object",
 				Properties: map[string]types.ToolProperty{
 					"path":         {Type: "string"},
-					"start_anchor": {Type: "string", Description: "Anchor of the FIRST line to replace (inclusive). Format: WORD:hash only, no §."},
-					"end_anchor":   {Type: "string", Description: "Anchor of the LAST line to replace (inclusive). Format: WORD:hash only, no §."},
-					"replacement":  {Type: "string", Description: "Plain source code only. These lines replace start_anchor through end_anchor entirely. Never include WORD:hash§ prefixes."},
+					"start_anchor": {Type: "string", Description: "Anchor of the FIRST line to replace (inclusive): the whole part before §, e.g. k7fwd."},
+					"end_anchor":   {Type: "string", Description: "Anchor of the LAST line to replace (inclusive): the whole part before §, e.g. k7fwd."},
+					"replacement":  {Type: "string", Description: "Plain source code only. These lines replace start_anchor through end_anchor entirely. Never include anchor§ prefixes. Empty string deletes the range; a lone newline is one blank line."},
 				},
 				Required: []string{"path", "start_anchor", "end_anchor"},
 			},

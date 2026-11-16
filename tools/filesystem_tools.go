@@ -484,8 +484,10 @@ func executeGetAnchorsTool(args map[string]any, restrictedRoot string, globalIgn
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}
-	return windowToolOutput(annotated, offset, limit, "get_anchors",
+	out := windowToolOutput(annotated, offset, limit, "get_anchors",
 		" (anchors already shown stay valid)")
+	globalAnchorState.MarkSeen(absPath, out)
+	return out
 }
 
 // executeReplaceAnchorsTool handles the "replace_anchors" case.
@@ -504,9 +506,9 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 	}
 	// replacement is optional (empty string = delete the range)
 	replacement, _ := args["replacement"].(string)
-	// Tolerate the model passing annotated lines (e.g. "Agate:a3§content") in the
-	// replacement — strip the Word:hash§ prefixes so only plain source is written.
-	replacement = stripAnchors(replacement)
+	// Annotated prefixes ("k7fwd§content") the model may have copied into the
+	// replacement are stripped by PreviewEdit, and only when the token is a valid
+	// one (check characters included) for an id this file issued — a line that merely contains "§" must reach the file intact.
 
 	root, err := getRoot(restrictedRoot)
 	if err != nil {
@@ -520,6 +522,7 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 	absPath := filepath.Join(restrictedRoot, relPath)
 
 	var oldLines, newLines []string
+	var edited editRange
 	var oldContent string
 	err = func() error {
 		globalAnchorState.opMu.Lock()
@@ -529,10 +532,10 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 			return fmt.Errorf("cannot read current file: %w — no changes written; call get_anchors again", err)
 		}
 		oldContent = string(data)
-		if err := globalAnchorState.validateContent(absPath, oldContent); err != nil {
+		if err := globalAnchorState.syncWithDisk(absPath, oldContent); err != nil {
 			return err
 		}
-		oldLines, newLines, err = globalAnchorState.PreviewEdit(absPath, startAnchor, endAnchor, replacement)
+		oldLines, newLines, edited, err = globalAnchorState.PlanEdit(absPath, startAnchor, endAnchor, replacement)
 		return err
 	}()
 	if err != nil {
@@ -565,12 +568,11 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 	}
 	// Revalidate both disk and anchors: /clear or another patch may have run meanwhile.
 	if string(data) != oldContent {
-		globalAnchorState.mu.Lock()
-		delete(globalAnchorState.files, absPath)
-		globalAnchorState.mu.Unlock()
-		return "error: file changed on disk while awaiting approval — no changes written; call get_anchors again and reconsider the patch using the current content"
+		// The snapshot is left as is: the next call reconciles it with the disk and
+		// reports exactly which anchors changed.
+		return "error: file changed on disk while awaiting approval — no changes written; retry the patch (re-read with get_anchors if its anchors are reported stale)"
 	}
-	if err := globalAnchorState.validateContent(absPath, string(data)); err != nil {
+	if err := globalAnchorState.syncWithDisk(absPath, string(data)); err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}
 	if _, _, err := globalAnchorState.PreviewEdit(absPath, startAnchor, endAnchor, replacement); err != nil {
@@ -597,7 +599,7 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 		return err.Error()
 	}
 
-	_, insertedOnly := globalAnchorState.CommitEdit(absPath, oldLines, newLines)
+	_, insertedOnly := globalAnchorState.CommitEdit(absPath, edited, oldLines, newLines)
 	if insertedOnly == "" {
 		return "updated (lines deleted, no new anchors)"
 	}
@@ -703,7 +705,7 @@ func executeContextSnapshotTool(args map[string]any, restrictedRoot string, glob
 // ─── helpers in the same package ─────────────────────────────────────────────
 // getRoot, validatePathInRoot, deletePathInRoot, copyPathInRoot, renameInRoot
 // are defined in path.go.
-// SplitLines, JoinLines, stripAnchors, slicesEqual are defined in anchor_state.go.
+// SplitLines, JoinLines, slicesEqual are defined in anchor_state.go.
 // globalAnchorState is a *AnchorStateManager in anchor_state.go.
 // GrepRun, GrepOptions are defined in grep.go.
 // askUpdatePermission, askWritePermission, askDeletePermission, askCopyPermission,
