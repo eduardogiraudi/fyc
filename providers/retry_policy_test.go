@@ -474,12 +474,46 @@ func TestParseAnthropicStreamMarksTransientFailures(t *testing.T) {
 	if err := parse(overloaded); !errors.Is(err, ErrStreamTransient) || !strings.Contains(err.Error(), "Overloaded") {
 		t.Fatalf("overloaded_error must be resendable with its message kept: %v", err)
 	}
+	rateLimited := anthropicSSE("error", `{"type":"error","error":{"type":"rate_limit_error","message":"Slow down"}}`)
+	if err := parse(rateLimited); !errors.Is(err, ErrStreamRateLimit) || !errors.Is(err, ErrStreamTransient) {
+		t.Fatalf("rate_limit_error must use the HTTP 429 retry policy: %v", err)
+	}
 	invalid := anthropicSSE("error", `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`)
 	if err := parse(invalid); err == nil || errors.Is(err, ErrStreamTransient) {
 		t.Fatalf("invalid_request_error must not be resent: %v", err)
 	}
 	if err := parse(anthropicStreamPrefix()); !errors.Is(err, ErrStreamTransient) {
 		t.Fatalf("a stream cut before message_stop must be resendable: %v", err)
+	}
+}
+
+func TestParseCodexStreamMarksTransientFailures(t *testing.T) {
+	for _, tc := range []struct {
+		code      string
+		transient bool
+		rateLimit bool
+	}{
+		{"rate_limit_exceeded", true, true},
+		{"server_error", true, false},
+		{"invalid_prompt", false, false},
+	} {
+		stream := `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"` + tc.code + `","message":"try later"}}}` + "\n\n"
+		_, err := parseCodexStreamResponse(context.Background(), io.NopCloser(strings.NewReader(stream)), false, NewSilentOutputSink())
+		if errors.Is(err, ErrStreamTransient) != tc.transient {
+			t.Errorf("%s: transient=%v, want %v (err=%v)", tc.code, errors.Is(err, ErrStreamTransient), tc.transient, err)
+		}
+		if errors.Is(err, ErrStreamRateLimit) != tc.rateLimit {
+			t.Errorf("%s: rate limit=%v, want %v (err=%v)", tc.code, errors.Is(err, ErrStreamRateLimit), tc.rateLimit, err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "try later") {
+			t.Errorf("%s: original failure not preserved: %v", tc.code, err)
+		}
+	}
+
+	quota := `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"rate_limit_exceeded","message":"insufficient_quota"}}}` + "\n\n"
+	_, err := parseCodexStreamResponse(context.Background(), io.NopCloser(strings.NewReader(quota)), false, NewSilentOutputSink())
+	if err == nil || errors.Is(err, ErrStreamTransient) || errors.Is(err, ErrStreamRateLimit) {
+		t.Fatalf("an exhausted quota must not be retried: %v", err)
 	}
 }
 
@@ -525,6 +559,31 @@ func TestWithStreamResendResendsTransientFailures(t *testing.T) {
 		}
 		if got := time.Since(start); got != 7*time.Second { // 1s + 2s + 4s
 			t.Fatalf("waited %s, want 7s", got)
+		}
+	})
+
+	synctest.Test(t, func(t *testing.T) {
+		withRand(t, 0.5)
+		calls := 0
+		p := WithStreamResend(streamFunc(func(context.Context, []types.Message, []types.Tool, types.OutputSink) (*types.StreamResult, error) {
+			calls++
+			return nil, rateLimitedStream(errors.New("rate limited"))
+		}))
+		sink := &countdownSink{}
+		start := time.Now()
+		_, err := p.StreamChat(context.Background(), nil, nil, sink)
+		if !errors.Is(err, ErrStreamRateLimit) {
+			t.Fatalf("exhausted rate-limit resends must surface the failure: %v", err)
+		}
+		if calls != maxRetryAttempts {
+			t.Fatalf("calls=%d, want the HTTP 429 budget of %d", calls, maxRetryAttempts)
+		}
+		if got := time.Since(start); got != totalBackoff(maxRetryAttempts) {
+			t.Fatalf("waited %s, want %s", got, totalBackoff(maxRetryAttempts))
+		}
+		wantNotice := fmt.Sprintf("HTTP 429 (2/%d)", maxRetryAttempts)
+		if len(sink.labels) == 0 || !strings.Contains(sink.labels[0], wantNotice) {
+			t.Fatalf("rate-limit retry was not announced with the HTTP policy: %q", sink.labels)
 		}
 	})
 }

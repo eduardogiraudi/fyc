@@ -713,7 +713,9 @@ loop:
 				}
 			case "error":
 				err := fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
-				if isTransientAnthropicErrorType(event.Error.Type) {
+				if event.Error.Type == "rate_limit_error" {
+					err = rateLimitedStream(err)
+				} else if isTransientAnthropicErrorType(event.Error.Type) {
 					err = transientStream(err)
 				}
 				return nil, err

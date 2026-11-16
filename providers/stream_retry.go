@@ -24,6 +24,10 @@ var ErrStreamIdle = errors.New("provider stream idle")
 // has been shown to the user.
 var ErrStreamTransient = errors.New("provider stream failed transiently")
 
+// ErrStreamRateLimit marks an in-band rate limit, which follows the HTTP 429
+// retry budget instead of the smaller budget for other stream failures.
+var ErrStreamRateLimit = errors.New("provider stream rate limited")
+
 // transientStreamError tags err as ErrStreamTransient without changing its
 // message, so logs and the error shown to the user stay exactly as before.
 type transientStreamError struct{ err error }
@@ -37,6 +41,20 @@ func transientStream(err error) error {
 		return nil
 	}
 	return &transientStreamError{err: err}
+}
+
+type rateLimitStreamError struct{ err error }
+
+func (e *rateLimitStreamError) Error() string { return e.err.Error() }
+func (e *rateLimitStreamError) Unwrap() []error {
+	return []error{e.err, ErrStreamRateLimit, ErrStreamTransient}
+}
+
+func rateLimitedStream(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &rateLimitStreamError{err: err}
 }
 
 // streamIdleError reports an idle provider without losing the identity of a
@@ -162,11 +180,12 @@ func (s *resendSink) WriteToolOutput(label, res string) {
 type resendProvider struct{ types.Provider }
 
 // WithStreamResend makes StreamChat resend a sampling request that fails before
-// producing any visible output (provider idle, connection dropped mid-response),
-// up to MaxStreamResends times. A resend is safe only there: the caller's
-// history is untouched on failure and no tool has run yet, so nothing is
-// replayed or duplicated. A stream that already produced visible output is never
-// resent: the caller surfaces the error (the chat loop then offers /retry).
+// producing any visible output (provider idle, connection dropped mid-response).
+// Ordinary failures use MaxStreamResends; in-band rate limits use the HTTP 429
+// budget. A resend is safe only there: the caller's history is untouched on
+// failure and no tool has run yet, so nothing is replayed or duplicated. A
+// stream that already produced visible output is never resent: the caller
+// surfaces the error (the chat loop then offers /retry).
 func WithStreamResend(p types.Provider) types.Provider {
 	if p == nil {
 		return nil
@@ -178,20 +197,35 @@ func (p *resendProvider) StreamChat(ctx context.Context, messages []types.Messag
 	if sink == nil {
 		sink = NewSilentOutputSink()
 	}
-	for resend := 0; ; resend++ {
+	for attemptNumber := 1; ; attemptNumber++ {
 		attempt := &resendSink{OutputSink: sink}
 		result, err := p.Provider.StreamChat(ctx, messages, tools, attempt)
-		if err == nil || attempt.wrote || resend == MaxStreamResends || !StreamResendRetryable(ctx, err) {
+		if err == nil || attempt.wrote || !StreamResendRetryable(ctx, err) {
 			return result, err
 		}
+
+		limit := MaxStreamResends + 1
 		reason := "network error"
+		rateLimited := errors.Is(err, ErrStreamRateLimit)
 		switch {
+		case rateLimited:
+			limit = maxRetryAttempts
+			reason = "HTTP 429"
 		case errors.Is(err, ErrStreamIdle):
 			reason = "provider idle"
 		case errors.Is(err, ErrStreamTransient):
 			reason = "provider error"
 		}
-		if !WaitStreamResend(ctx, sink, resend+1, withJitter(StreamResendDelay(resend+1)), reason) {
+		if attemptNumber >= limit {
+			return result, err
+		}
+
+		delay := withJitter(StreamResendDelay(attemptNumber))
+		if rateLimited {
+			if !waitRetry(ctx, sink, attemptNumber, limit, delay, reason) {
+				return nil, context.Cause(ctx)
+			}
+		} else if !WaitStreamResend(ctx, sink, attemptNumber, delay, reason) {
 			return nil, context.Cause(ctx)
 		}
 	}

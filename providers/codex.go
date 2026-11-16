@@ -760,7 +760,21 @@ loop:
 					}
 				}
 			case "response.failed":
-				return nil, fmt.Errorf("Responses API failed: %s", data)
+				err := fmt.Errorf("Responses API failed: %s", data)
+				if response, ok := event["response"].(map[string]interface{}); ok {
+					if responseError, ok := response["error"].(map[string]interface{}); ok {
+						code, _ := responseError["code"].(string)
+						switch code {
+						case "rate_limit_exceeded":
+							if !isPermanentQuotaError([]byte(data)) {
+								err = rateLimitedStream(err)
+							}
+						case "server_error":
+							err = transientStream(err)
+						}
+					}
+				}
+				return nil, err
 			case "response.completed", "response.complete":
 				sawTerminal = true
 				result.FinishReason = "stop"
