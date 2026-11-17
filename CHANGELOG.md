@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-11-17
+
+### Added
+
+- compaction: render a role-tagged transcript and merge earlier summaries (`3dd014d`).
+- providers: resend sampling requests that fail before any visible output (`34ad3ce`).
+- providers: make retries resilient to overload and transient stream failures (`ce654a1`).
+- tools: harden anchored edits and conflict recovery (`189239d`).
+
+### Fixed
+
+- tokens: count CJK, kana, hangul and emoji as one token per character (`3dd014d`).
+- providers: retry in-band rate limits with the HTTP 429 budget (`aca0694`).
+- codex: retry lost HTTP/2 streams (`83a408e`).
+- compaction: resend compaction requests on in-band 429 and mid-stream drops (`944c51b`).
+
 ## [1.3.0] - 2026-11-09
 
 ### Added
