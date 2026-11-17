@@ -122,7 +122,9 @@ func attemptCompaction(ctx context.Context, cfg config.Config, choice config.Com
 	// A utility request must not inherit the active mode's instructions, and it
 	// keeps the conversation-log scope so the summary stays correlated.
 	reqCtx := logger.WithAgent(sessionLogContext(ctx, s), "compaction", "")
-	result, err := providers.WithLogging(provider).StreamChat(reqCtx, pruneScreenshotImages(messages, 0), nil, providers.NewSilentOutputSink())
+	// WithStreamResend stays outside WithLogging so each attempt is logged, and
+	// covers in-band 429/overload and mid-stream drops that doWithRetry never sees.
+	result, err := providers.WithStreamResend(providers.WithLogging(provider)).StreamChat(reqCtx, pruneScreenshotImages(messages, 0), nil, providers.NewSilentOutputSink())
 	if err != nil {
 		res.Attempts = []compactionAttempt{{Model: res.Model, Err: err}}
 		return res, err
