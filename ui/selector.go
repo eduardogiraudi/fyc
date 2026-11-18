@@ -240,16 +240,22 @@ func (m *SelectorModel) adjustOffset() {
 
 // optionLine renders one option row, applying the selection highlight.
 func (m SelectorModel) optionLine(i int) string {
-	opt := m.Options[i]
+	return selectorOptionLine(m.Options, m.Cursor, i)
+}
+
+// selectorOptionLine renders one option row of a selector, highlighting the
+// cursor row.
+func selectorOptionLine(options []string, cursor, i int) string {
+	opt := options[i]
 	if strings.HasPrefix(opt, "---") || strings.HasPrefix(opt, "───") {
 		return "  " + DimStyle.Render(strings.Repeat("─", 28))
 	}
 	radio := RadioOff.String()
-	if m.Cursor == i {
+	if cursor == i {
 		radio = RadioOn.String()
 	}
 	line := fmt.Sprintf(" %s %s", radio, opt)
-	if m.Cursor == i {
+	if cursor == i {
 		return SelectedBg.Render(line)
 	}
 	return "  " + opt
@@ -387,17 +393,36 @@ func (m SelectorModel) View() string {
 	return ClampBlock(boxed, w)
 }
 
-func SelectOption(title string, options []string) int {
-	return withExternalPrompt(func() int {
-		p := tea.NewProgram(SelectorModel{
-			Title:      title,
-			Options:    options,
-			SuggestIdx: -1,
-		})
-
+// selectOrNested hosts the selector inside the alt-screen chat frame when one is
+// available and falls back to a nested program everywhere else. Hosting it keeps
+// a permission prompt from releasing the terminal, which would leave the TUI.
+func selectOrNested(build func() *SelectorModel) (int, string) {
+	model := build()
+	if final, ok := runInApp(*model); ok {
+		res := final.(SelectorModel)
+		return res.Choice, res.Suggestion
+	}
+	res := withExternalPrompt(func() selectorResult {
+		p := tea.NewProgram(*model)
 		m, _ := p.Run()
-		return m.(SelectorModel).Choice
+		sm := m.(SelectorModel)
+		return selectorResult{choice: sm.Choice, suggestion: sm.Suggestion}
 	})
+	return res.choice, res.suggestion
+}
+
+// selectorResult is the answer of a nested selector: the choice and, for a
+// "deny with suggestion" row, what was typed.
+type selectorResult struct {
+	choice     int
+	suggestion string
+}
+
+func SelectOption(title string, options []string) int {
+	idx, _ := selectOrNested(func() *SelectorModel {
+		return &SelectorModel{Title: title, Options: options, SuggestIdx: -1}
+	})
+	return idx
 }
 
 // SelectOptionWindow is SelectOption with an explicit window height: only
@@ -405,80 +430,34 @@ func SelectOption(title string, options []string) int {
 // pinnedTop options stay visible above the scroll window (e.g. a fixed "back"
 // row that never scrolls away).
 func SelectOptionWindow(title string, options []string, maxVisible, pinnedTop int) int {
-	return withExternalPrompt(func() int {
-		p := tea.NewProgram(SelectorModel{
-			Title:      title,
-			Options:    options,
-			SuggestIdx: -1,
-			MaxVisible: maxVisible,
-			PinnedTop:  pinnedTop,
-		})
-
-		m, _ := p.Run()
-		return m.(SelectorModel).Choice
+	idx, _ := selectOrNested(func() *SelectorModel {
+		return &SelectorModel{Title: title, Options: options, SuggestIdx: -1, MaxVisible: maxVisible, PinnedTop: pinnedTop}
 	})
+	return idx
 }
 
 // SelectOptionWithStyledTitle allows passing a title already formatted with lipgloss styles
 func SelectOptionWithStyledTitle(styledTitle string, options []string) int {
-	return withExternalPrompt(func() int {
-		p := tea.NewProgram(SelectorModel{
-			StyledTitle: styledTitle,
-			Options:     options,
-			SuggestIdx:  -1,
-		})
-
-		m, _ := p.Run()
-		return m.(SelectorModel).Choice
+	idx, _ := selectOrNested(func() *SelectorModel {
+		return &SelectorModel{StyledTitle: styledTitle, Options: options, SuggestIdx: -1}
 	})
+	return idx
 }
 
 // SelectOptionWithSuggestion shows a selector with inline suggestion input.
 // If the user selects the option at denyIdx, an inline text input appears.
 // Returns (choiceIndex, suggestionText).
 func SelectOptionWithSuggestion(title string, options []string, denyIdx int) (int, string) {
-	res := withExternalPrompt(func() struct {
-		choice     int
-		suggestion string
-	} {
-		p := tea.NewProgram(SelectorModel{
-			Title:             title,
-			Options:           options,
-			width:             terminalWidth(),
-			SuggestIdx:        denyIdx,
-			AutoAcceptOnCtrlO: true,
-		})
-		m, _ := p.Run()
-		sm := m.(SelectorModel)
-		return struct {
-			choice     int
-			suggestion string
-		}{sm.Choice, sm.Suggestion}
+	return selectOrNested(func() *SelectorModel {
+		return &SelectorModel{Title: title, Options: options, width: terminalWidth(), SuggestIdx: denyIdx, AutoAcceptOnCtrlO: true}
 	})
-	return res.choice, res.suggestion
 }
 
 // SelectOptionWithStyledTitleSuggestion is like SelectOptionWithSuggestion but with a pre-styled title.
 func SelectOptionWithStyledTitleSuggestion(styledTitle string, options []string, denyIdx int) (int, string) {
-	res := withExternalPrompt(func() struct {
-		choice     int
-		suggestion string
-	} {
-		p := tea.NewProgram(SelectorModel{
-			StyledTitle:       styledTitle,
-			Options:           options,
-			width:             terminalWidth(),
-			SuggestIdx:        denyIdx,
-			AutoAcceptOnCtrlO: true,
-		})
-		m, _ := p.Run()
-		sm := m.(SelectorModel)
-		return struct {
-			choice     int
-			suggestion string
-		}{sm.Choice, sm.Suggestion}
+	return selectOrNested(func() *SelectorModel {
+		return &SelectorModel{StyledTitle: styledTitle, Options: options, width: terminalWidth(), SuggestIdx: denyIdx, AutoAcceptOnCtrlO: true}
 	})
-	return res.choice, res.suggestion
 }
 
 // terminalWidth returns the current terminal width, or 80 if unknown.
@@ -490,8 +469,15 @@ func terminalWidth() int {
 	return w
 }
 
-// InputText prompts the user for a single line of text using a plain bufio reader.
+// InputText prompts the user for a single line of text. Inside the alt-screen
+// chat the line is drawn in the frame; everywhere else it is a plain reader that
+// takes over the terminal (see withExternalPrompt).
 func InputText(prompt string) string {
+	if final, ok := runInApp(textPromptModel{title: prompt}); ok {
+		// A cancelled prompt reads as an empty answer, exactly like closing
+		// stdin on the plain reader below.
+		return final.(textPromptModel).value
+	}
 	return withExternalPrompt(func() string {
 		fmt.Println(TitleStyle.Render(prompt))
 		scanner := bufio.NewScanner(os.Stdin)
@@ -715,13 +701,17 @@ func MultiSelectOptionWithAction(title string, options []string, states []bool, 
 }
 
 func multiSelectRun(title string, options []string, states []bool, requireSelection bool) []bool {
+	model := MultiSelectModel{
+		Title:            title,
+		Options:          options,
+		States:           states,
+		RequireSelection: requireSelection,
+	}
+	if final, ok := runInApp(model); ok {
+		return final.(MultiSelectModel).States
+	}
 	return withExternalPrompt(func() []bool {
-		p := tea.NewProgram(MultiSelectModel{
-			Title:            title,
-			Options:          options,
-			States:           states,
-			RequireSelection: requireSelection,
-		})
+		p := tea.NewProgram(model)
 		m, _ := p.Run()
 		return m.(MultiSelectModel).States
 	})

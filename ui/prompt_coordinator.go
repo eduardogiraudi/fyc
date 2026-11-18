@@ -11,7 +11,19 @@ var promptCoordinator = struct {
 	program *tea.Program
 	depth   int
 	paused  bool
+	// mouse remembers that the chat program reports mouse events (alt-screen
+	// mode): ReleaseTerminal turns mouse reporting off and RestoreTerminal does
+	// not turn it back on, so resuming has to re-enable it explicitly.
+	mouse bool
 }{}
+
+// SetPromptMouse records whether the chat program reports mouse events, so the
+// mode is restored after a nested prompt released the terminal.
+func SetPromptMouse(enabled bool) {
+	promptCoordinator.Lock()
+	promptCoordinator.mouse = enabled
+	promptCoordinator.Unlock()
+}
 
 // SetPromptProgram registers the long-lived chat Bubble Tea program so nested
 // prompts can pause it and exclusively take over stdin/stdout.
@@ -58,11 +70,18 @@ func ResumeExternalPrompt() {
 	}
 	p := promptCoordinator.program
 	wasPaused := promptCoordinator.paused
+	mouse := promptCoordinator.mouse
 	promptCoordinator.paused = false
 	promptCoordinator.Unlock()
 
 	if p != nil && wasPaused {
 		_ = p.RestoreTerminal()
+		if mouse {
+			// RestoreTerminal re-enters the alternate screen but leaves mouse
+			// reporting off: without this the wheel stops working after the
+			// first nested prompt.
+			p.Send(tea.EnableMouseCellMotion())
+		}
 		p.Send(StreamResumeMsg{})
 	}
 }

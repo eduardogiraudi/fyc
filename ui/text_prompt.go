@@ -157,3 +157,19 @@ func InputLine(title string) (string, bool) {
 	})
 	return res.value, res.ok
 }
+
+// NewTextPrompt returns the single-line prompt to host inside the chat frame
+// (see runInApp); TextPromptValue reads the answer back afterwards. Enter
+// confirms, Esc/Ctrl+C cancels and reads as an empty answer.
+func NewTextPrompt(title string) tea.Model {
+	return textPromptModel{title: title}
+}
+
+// TextPromptValue is what the user typed into a hosted prompt, or "" when they
+// cancelled.
+func TextPromptValue(model tea.Model) string {
+	if m, ok := model.(textPromptModel); ok {
+		return m.value
+	}
+	return ""
+}

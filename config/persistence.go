@@ -246,6 +246,19 @@ var configMigrations = store.Migrations{
 		doc["schema"] = json.RawMessage(strconv.Itoa(13))
 		return json.Marshal(doc)
 	},
+	13: func(data []byte) ([]byte, error) {
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
+		// v14 adds alt_screen: the opt-in full-screen chat UI. It defaults to
+		// false (the inline REPL stays the default), so only the version is here.
+		doc["schema"] = json.RawMessage(strconv.Itoa(14))
+		return json.Marshal(doc)
+	},
 }
 
 // Load reads config.json into the in-memory configuration, ignoring errors.

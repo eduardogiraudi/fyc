@@ -111,11 +111,16 @@ func clampInt(v, lo, hi int) int {
 
 // CLISettings shows the auto-compaction editor; Back applies, q/esc discards.
 func CLISettings(title string, enabled, midTurn bool, threshold, step, minThreshold, maxThreshold int) (newEnabled, newMidTurn bool, newThreshold int, confirmed bool) {
+	model := cliSettingsModel{
+		title: title, enabled: enabled, midTurn: midTurn,
+		threshold: threshold, step: step, min: minThreshold, max: maxThreshold,
+	}
+	if final, ok := runInApp(model); ok {
+		sm := final.(cliSettingsModel)
+		return sm.enabled, sm.midTurn, sm.threshold, sm.confirmed
+	}
 	res := withExternalPrompt(func() cliSettingsResult {
-		p := tea.NewProgram(cliSettingsModel{
-			title: title, enabled: enabled, midTurn: midTurn,
-			threshold: threshold, step: step, min: minThreshold, max: maxThreshold,
-		})
+		p := tea.NewProgram(model)
 		m, _ := p.Run()
 		sm := m.(cliSettingsModel)
 		return cliSettingsResult{enabled: sm.enabled, midTurn: sm.midTurn, threshold: sm.threshold, confirmed: sm.confirmed}

@@ -138,6 +138,10 @@ type Config struct {
 	AllowFileWrite   bool         `json:"allow_file_write"`
 	AskFileWriteEach bool         `json:"ask_file_write_each"`
 	CompactBanner    bool         `json:"compact_banner"`
+	// AltScreen runs the chat UI in the terminal's alternate screen buffer: a
+	// full-screen TUI whose transcript scrolls in-app. Off by default, which
+	// keeps the inline REPL whose output stays in the terminal scrollback.
+	AltScreen bool `json:"alt_screen"`
 	// MaxMedia bounds the recent image attachments sent with each request.
 	MaxMedia int `json:"max_media"`
 	// AllowComputerUse persists "Allow always" for computer-use tools.
@@ -219,7 +223,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 13
+const CurrentSchemaVersion = 14
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.

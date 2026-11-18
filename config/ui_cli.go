@@ -28,6 +28,7 @@ func manageCLISettings() {
 			"Browser Paths (web_search)",
 			fmt.Sprintf("Sandbox GPU, Linux only (current: %s)", onOff(config.Sandbox.GPUEnabled())),
 			fmt.Sprintf("Max Media (current: %d)", EffectiveMaxMedia()),
+			fmt.Sprintf("Chat TUI: alt screen (current: %s)", onOff(config.AltScreen)),
 			"← Back",
 		})
 
@@ -49,11 +50,37 @@ func manageCLISettings() {
 		case 7:
 			manageMaxMedia()
 		case 8:
+			manageAltScreen()
+		case 9:
 			return
 		case ui.SelectorCanceled:
 			return // q / Ctrl+C: leave the CLI Settings menu
 		}
 	}
+}
+
+// manageAltScreen switches the chat UI between the inline REPL (default) and the
+// alt-screen full TUI (config: "alt_screen": true). The choice applies to the
+// next chat start.
+func manageAltScreen() {
+	idx := ui.SelectOption("Chat TUI rendering", []string{
+		"Inline REPL (default): output stays in the terminal scrollback",
+		"Alt screen: full-screen TUI, transcript scrolled with pgup/pgdn",
+		"← Back",
+	})
+	if idx != 0 && idx != 1 {
+		return
+	}
+	SetAltScreen(idx == 1)
+	if err := SaveE(); err != nil {
+		fmt.Println(ui.ErrorStyle.Render("Could not save chat TUI setting: " + err.Error()))
+		return
+	}
+	label := "inline REPL"
+	if idx == 1 {
+		label = "alt screen"
+	}
+	fmt.Println(ui.OkStyle.Render("Chat TUI: " + label + " (takes effect on the next chat)"))
 }
 
 func onOff(b bool) string {

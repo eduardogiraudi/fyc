@@ -164,6 +164,14 @@ The configuration file and its directory are created with restricted permissions
 
 The startup banner defaults to a compact **FYC** logo with the initial information on its right. Set `"compact_banner": false` in `config.json` to restore the full banner and the information below it. Existing configurations are migrated automatically; an explicit `false` is preserved.
 
+### Chat rendering: inline REPL or alt screen
+
+The chat runs in the terminal scrollback by default: completed output is printed line by line and the terminal itself scrolls, so an `exit` leaves the whole conversation in the history. Set `"alt_screen": true` in `config.json` (or **CLI Settings → Chat TUI: alt screen**) to run the full-screen TUI instead: the transcript is drawn inside an alternate screen and scrolled with the mouse wheel, `PgUp`/`PgDn`, `Shift+↑`/`Shift+↓` (one row), `Ctrl+Home` (top) and `Ctrl+End` (back to the live output); submitting a message returns to the live output. The wheel moves the transcript instead of the input history, because the terminal no longer translates it into arrow keys. The mode is off by default and takes effect on the next chat start. Because the alternate screen has no scrollback, nothing of the conversation is left in the terminal after exiting — the session is still saved and resumable with `/sessions`, and a resumed conversation is replayed into the transcript itself (at start-up it is seeded into the frame, since anything printed before the alternate screen would be hidden).
+
+Because fyc reports mouse events in this mode, the terminal's own selection is bypassed: drag with the left button to select transcript rows (the selection is highlighted) and releasing the mouse writes it to the system clipboard — through `wl-copy`, `xclip`, `xsel`, `pbcopy` or `clip.exe` when one is on `PATH`, otherwise through the OSC 52 escape, which also works over ssh. A confirmation line under the status bar reports how many lines were copied, or why the copy failed. `Shift`+drag still hands the mouse back to the terminal for its own selection.
+
+Confirmations and menus opened from the chat are handled differently in the two modes. The inline REPL runs them as separate prompts below the conversation, so their output stays in the scrollback. In alt-screen mode the same screen — a permission request, `/tools`, `/sessions`, `/settings`, the hooks and status-bar settings — is drawn **inside the frame**, replacing the input until it is answered, with exactly the keys it has in the REPL (`↑`/`↓` navigate, `Enter` confirms, `Esc`/`q` denies, typed rows confirm with `Enter`). The component that asked waits while the chat keeps the terminal, so nothing of this ever drops you out of the full-screen UI or clears the transcript: dismissing the prompt answers it (a dismissed permission is a denial) and the turn keeps running. Only the full-screen details and diff viewers remain programs of their own, which do pause the TUI.
+
 ### Secrets and `${VAR}` placeholders
 
 Credentials are never stored in `config.json` in plain text. Every secret field holds a `${VAR}` (or `${VAR:-default}`) placeholder, and the concrete value lives in a sibling `auth.json` (mode 0600) or in the process environment:
@@ -192,6 +200,7 @@ The configuration flow can manage:
 - extra browser executables for `web_search` (`browser_paths`), under **CLI Settings → Browser Paths (web_search)**
 - recent image attachments sent to the model (`max_media`, default `10`), under **CLI Settings → Max Media**. The limit counts individual images from computer use and `read_media`; older images become text placeholders in requests, without changing saved history. Missing, zero or negative values use the default. Token estimation and compaction planning use the same limit.
 - optional delay between requests
+- chat rendering (`alt_screen`: inline REPL by default, full-screen TUI when true), under **CLI Settings → Chat TUI: alt screen**
 - auto-compaction settings (enable/disable, estimated-token threshold, the model that writes the summary and its failure policy), under **CLI Settings** / **CLI Settings → Compaction Model**
 - pre/post tool-execution hooks (enable/disable + command), under **CLI Settings → Hooks**
 - status-bar hook (per provider: on/off, command, include API keys/tokens, refresh interval, refresh on turn), under **CLI Settings → Status Bar Hook**
@@ -305,6 +314,8 @@ Inside the chat:
 | `/auto [on\|off]` | Toggle autonomous execution for the current session. |
 | `Ctrl+C` | Stop the current generation (on macOS it is `Ctrl`, not `Cmd`). |
 | `Ctrl+O` | Toggle autonomous execution without typing a command. |
+| Mouse wheel, `PgUp` / `PgDn`, `Shift+↑` / `Shift+↓`, `Ctrl+Home`, `Ctrl+End` | Scroll the transcript in alt-screen mode (`alt_screen: true`); `Ctrl+End` returns to the live output. The wheel scrolls the transcript instead of the input history. No effect in the default inline REPL, where the terminal scrolls. |
+| Left-drag, release | Select transcript rows in alt-screen mode and copy them to the clipboard on release (`Shift`+drag selects with the terminal instead). |
 | `/airplane [on\|off]` | Toggle `web_search` and web-dependent commands. Equivalent to disabling/enabling `web_search` in tool settings. |
 | `/clear` | Clear chat context while keeping system messages. |
 | `/retry` | Repeat the last failed provider request without rerunning completed tools. |

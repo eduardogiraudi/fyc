@@ -197,13 +197,18 @@ func (m hooksSettingsModel) View() string {
 // HooksSettings shows an inline editor for the pre/post tool hooks. The Back
 // row applies the changes, while q/esc discards them.
 func HooksSettings(preOn bool, preCmd string, postOn bool, postCmd string) (newPreOn bool, newPreCmd string, newPostOn bool, newPostCmd string, confirmed bool) {
+	model := hooksSettingsModel{
+		preOn:   preOn,
+		preCmd:  preCmd,
+		postOn:  postOn,
+		postCmd: postCmd,
+	}
+	if final, ok := runInApp(model); ok {
+		sm := final.(hooksSettingsModel)
+		return sm.preOn, sm.preCmd, sm.postOn, sm.postCmd, sm.confirmed
+	}
 	res := withExternalPrompt(func() hooksSettingsResult {
-		p := tea.NewProgram(hooksSettingsModel{
-			preOn:   preOn,
-			preCmd:  preCmd,
-			postOn:  postOn,
-			postCmd: postCmd,
-		})
+		p := tea.NewProgram(model)
 		m, _ := p.Run()
 		sm := m.(hooksSettingsModel)
 		return hooksSettingsResult{

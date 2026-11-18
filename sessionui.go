@@ -325,7 +325,7 @@ func writeSessionBlock(s *ChatSession, block string) {
 		bp.PrintBlock(block)
 		return
 	}
-	fmt.Println(ui.ClampBlock(block, ui.TerminalWidth()))
+	ui.PrintRenderedBlock(ui.ClampBlock(block, ui.TerminalWidth()))
 }
 
 // replaySessionHistory redraws a resumed conversation: without it a loaded

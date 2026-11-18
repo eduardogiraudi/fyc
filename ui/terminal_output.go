@@ -7,6 +7,40 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// preProgramBlock divertes rendered blocks printed before the chat program
+// exists (session replay on start-up) away from stdout. The alternate screen is
+// entered afterwards and would hide them, so the alt-screen chat seeds them into
+// its transcript instead.
+var preProgramBlock struct {
+	mu sync.Mutex
+	fn func(string)
+}
+
+// SetPreProgramBlockSink installs (or clears, with nil) the receiver of blocks
+// rendered before a chat program is attached.
+func SetPreProgramBlockSink(fn func(string)) {
+	preProgramBlock.mu.Lock()
+	preProgramBlock.fn = fn
+	preProgramBlock.mu.Unlock()
+}
+
+// PrintRenderedBlock writes an already-rendered block when no program is
+// attached: into the alt-screen seed when one is registered, into stdout
+// otherwise.
+func PrintRenderedBlock(text string) {
+	if text == "" {
+		return
+	}
+	preProgramBlock.mu.Lock()
+	fn := preProgramBlock.fn
+	preProgramBlock.mu.Unlock()
+	if fn != nil {
+		fn(text)
+		return
+	}
+	fmt.Println(text)
+}
+
 // TerminalOutputSink bridges provider/session output into the long-lived Bubble Tea chat program.
 type TerminalOutputSink struct {
 	mu             sync.Mutex
@@ -157,7 +191,7 @@ func (s *TerminalOutputSink) PrintBlock(text string) {
 	if s.send(StreamPrintMsg{Text: text}) {
 		return
 	}
-	fmt.Println(text)
+	PrintRenderedBlock(text)
 }
 
 func (s *TerminalOutputSink) Reset() {

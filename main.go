@@ -114,6 +114,19 @@ func main() {
 	}
 
 	cfg := config.Get()
+	// altScreen switches the chat between the inline REPL (default) and the
+	// full-screen TUI. In alt-screen mode nothing may be printed before the
+	// program takes over the terminal: the start-up notices are seeded into the
+	// chat transcript instead (see emit).
+	altScreen := cfg.AltScreen
+	var altSeed []string
+	emit := func(block string) {
+		if altScreen {
+			altSeed = append(altSeed, block)
+			return
+		}
+		fmt.Println(block)
+	}
 	info := []string{
 		fmt.Sprintf("%s %s %s %s %s", ui.ValueStyle.Render("v"+session.Version), ui.KeyStyle.Render("• OS:"), ui.ValueStyle.Render(runtime.GOOS), ui.KeyStyle.Render("• sha:"), ui.ValueStyle.Render(session.Commit)),
 		fmt.Sprintf("%s %s", ui.KeyStyle.Render("cwd:"), ui.ValueStyle.Render(session.RestrictedRoot)),
@@ -125,7 +138,7 @@ func main() {
 	}
 	info = append(info, fmt.Sprintf("%s %s %s %s", ui.KeyStyle.Render("reasoning:"), ui.ValueStyle.Render(cfg.Reasoning.Label()), ui.KeyStyle.Render("• temperature:"), ui.ValueStyle.Render(currentTemperatureLabel())))
 	if cfg.CompactionEnabled {
-		label := fmt.Sprintf("on @ %d tokens", config.EffectiveCompactionThreshold())
+		label := fmt.Sprintf("on @%d tokens", config.EffectiveCompactionThreshold())
 		label += " • compactor: " + cfg.CompactorLabel()
 		if cfg.CompactionMidTurn {
 			label += " • mid-turn: on"
@@ -151,7 +164,7 @@ func main() {
 	if len(extras) > 0 {
 		info = append(info, strings.Join(extras, "  "))
 	}
-	ui.RenderStartupHeader(cfg.CompactBanner, info)
+	emit(ui.StartupHeaderBlock(cfg.CompactBanner, info))
 	today := time.Now().Format("Monday, January 2, 2006")
 	userPreferences := loadUserPreferences()
 	sysPrompt := buildSystemPrompt(today, userPreferences, session)
@@ -159,7 +172,7 @@ func main() {
 		Role:    "system",
 		Content: sysPrompt,
 	})
-	ui.RenderTips()
+	emit(ui.TipsBlock())
 
 	// Initialize MCP servers in background with spinner
 	session.MCPManager = mcp.NewMCPManager(session.Version)
@@ -188,7 +201,7 @@ func main() {
 	}()
 	ui.AnimateSpinner("Starting MCP servers...", mcpDone, &mcpWg, "")
 	for _, msg := range mcpWarnings {
-		fmt.Println(ui.TipStyle.Render(msg))
+		emit(ui.TipStyle.Render(msg))
 	}
 
 	defer crawl.Shutdown()
@@ -218,7 +231,7 @@ func main() {
 	}()
 	ui.AnimateSpinner("Starting LSP servers & detecting git/browser...", lspDone, &lspWg, "")
 	if notice := webSearchNotice(session); notice != "" {
-		fmt.Println(ui.TipStyle.Render(notice))
+		emit(ui.TipStyle.Render(notice))
 	}
 	lspHeartbeatCtx, stopLSPHeartbeat := context.WithCancel(context.Background())
 	defer stopLSPHeartbeat()
@@ -251,7 +264,15 @@ func main() {
 	}()
 	updateSystemPrompt(session)
 
-	if showChatPrompt(session) {
+	// A resumed conversation is replayed here, before the chat program exists:
+	// in alt-screen mode those blocks have to be seeded into the transcript,
+	// because the alternate screen hides whatever stdout showed.
+	if altScreen {
+		ui.SetPreProgramBlockSink(func(block string) { altSeed = append(altSeed, block) })
+	}
+	dismissed := showChatPrompt(session)
+	ui.SetPreProgramBlockSink(nil)
+	if dismissed {
 		// The user dismissed the chat picker (q / Ctrl+C / Esc): quit instead
 		// of silently starting a new chat.
 		return
@@ -284,12 +305,30 @@ func main() {
 
 	chatSink := session.Sink.(*ui.TerminalOutputSink)
 	chat := newChatModel(session, chatSink, persistedHistory, buildSuggestionProvider(session))
-	prog := tea.NewProgram(chat, tea.WithoutSignals())
+	opts := []tea.ProgramOption{tea.WithoutSignals()}
+	if altScreen {
+		chat.enableAltScreen(altSeed)
+		// Mouse reporting is what turns a wheel turn into a MouseMsg: without
+		// it the terminal sends arrow keys and the wheel walks the input
+		// history. Cell motion (button-event mode) reports the wheel, not
+		// every pointer move.
+		opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	}
+	prog := tea.NewProgram(chat, opts...)
 	chatSink.AttachProgram(prog)
+	if altScreen {
+		// Confirmations and menus are drawn inside the frame (see ui.runInApp)
+		// and the mouse mode survives a nested prompt: in the alternate screen
+		// there is no scrollback to fall back into.
+		ui.EnableInAppPrompts()
+		ui.SetPromptMouse(true)
+	}
 	// Stop the status-bar hook refresher on every exit path from main,
 	// including a panic unwinding through prog.Run (a plain call after Run
-	// would be skipped in that case).
+	// would be skipped in that case). The in-app host goes with it: a prompt
+	// sent to a program that already returned would block for good.
 	defer stopStatusHook()
+	defer ui.DisableInAppPrompts()
 	if _, err := prog.Run(); err != nil {
 		fmt.Println(ui.InfoStyle.Render("Error: " + err.Error()))
 	}

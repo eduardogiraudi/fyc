@@ -215,8 +215,13 @@ func (m statusHookSettingsModel) View() string {
 // StatusHookSettings shows the inline editor for one status-bar hook. Back
 // applies the changes, while q/esc discards them.
 func StatusHookSettings(title string, v StatusHookValues) (StatusHookValues, bool) {
+	model := statusHookSettingsModel{title: title, v: v}
+	if final, ok := runInApp(model); ok {
+		sm := final.(statusHookSettingsModel)
+		return sm.v, sm.ok
+	}
 	res := withExternalPrompt(func() statusHookSettingsResult {
-		p := tea.NewProgram(statusHookSettingsModel{title: title, v: v})
+		p := tea.NewProgram(model)
 		m, _ := p.Run()
 		sm := m.(statusHookSettingsModel)
 		return statusHookSettingsResult{values: sm.v, confirmed: sm.ok}

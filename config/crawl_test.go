@@ -18,7 +18,7 @@ func TestCrawlPolicyMigrationAndRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := block != ""
-			if config.Crawl.AllowPrivateNetworks != want || config.Crawl.DisableSandbox != want || config.Model != "preserved" || config.Schema != 13 {
+			if config.Crawl.AllowPrivateNetworks != want || config.Crawl.DisableSandbox != want || config.Model != "preserved" || config.Schema != CurrentSchemaVersion {
 				t.Fatalf("migration changed policy: %+v", config.Crawl)
 			}
 			SetCrawlConfig(CrawlConfig{AllowPrivateNetworks: !want})

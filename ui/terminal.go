@@ -171,17 +171,23 @@ func RenderProviderInfo(providerInfo, temperature, mode string) string {
 		InfoStyle.Render("[Mode: ")+TitleStyle.Render(mode)+InfoStyle.Render("]"),
 	)
 }
-func RenderTips() {
-	fmt.Println(TipStyle.Render("Type /help for commands  •  exit to quit  •  enter to send  •  /sub on to enable subagents spawning"))
-	fmt.Println(TipStyle.Render("ctrl+o or /auto to enable/disable auto mode"))
+
+// TipsBlock returns the start-up hints as one rendered block: the caller draws
+// it itself (the alt-screen chat transcript seeds it into the view).
+func TipsBlock() string {
+	return TipStyle.Render("Type /help for commands  •  exit to quit  •  enter to send  •  /sub on to enable subagents spawning") + "\n" +
+		TipStyle.Render("ctrl+o or /auto to enable/disable auto mode")
 }
 
-func RenderStartupHeader(compact bool, info []string) {
+// StartupHeaderBlock returns the start-up banner rendered for the current
+// terminal width. The caller draws it itself (the alt-screen chat transcript
+// seeds it into the view).
+func StartupHeaderBlock(compact bool, info []string) string {
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {
 		width = 80
 	}
-	fmt.Println(formatStartupHeader(compact, info, width))
+	return formatStartupHeader(compact, info, width)
 }
 
 // TerminalWidth returns the terminal width in cells, falling back to 80 when the
