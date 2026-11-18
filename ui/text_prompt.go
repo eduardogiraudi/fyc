@@ -138,11 +138,13 @@ func (m textPromptModel) View() string {
 	return ClampBlock(b.String(), width)
 }
 
-// InputLine prompts for a single line of text, exclusively taking over the
-// terminal while the chat program is paused. ok is false when the user cancels
-// (Esc / Ctrl+C). It is the safe replacement for OutputSink.ReadLine inside a
-// running TUI: a bare nested tea.Program would fight the main one for stdin.
+// InputLine hosts a single-line prompt in the chat, or takes over the terminal
+// while the inline chat is paused. Cancellation returns ok=false.
 func InputLine(title string) (string, bool) {
+	if final, ok := runInApp(textPromptModel{title: title}); ok {
+		m := final.(textPromptModel)
+		return m.value, m.ok
+	}
 	res := withExternalPrompt(func() struct {
 		value string
 		ok    bool

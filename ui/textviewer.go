@@ -38,6 +38,9 @@ type TextViewerModel struct {
 // many-line listing never grows taller than the terminal — which is exactly
 // what truncated a tall command in the inline permission selector.
 func RunTextViewer(title, subtitle string, lines []types.DetailLine) {
+	if _, ok := runInApp(TextViewerModel{Title: title, Subtitle: subtitle, Lines: lines}); ok {
+		return
+	}
 	withExternalPrompt(func() struct{} {
 		w, h, err := term.GetSize(int(os.Stdout.Fd()))
 		if err != nil || w <= 0 {

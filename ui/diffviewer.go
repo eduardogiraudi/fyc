@@ -89,6 +89,12 @@ var (
 // RunDiffViewer creates and runs a full-screen diff viewer program.
 // It blocks until the user presses ESC or q, then returns.
 func RunDiffViewer(title, stats, filename string, lines []DiffLine) {
+	hosted := DiffViewerModel{Title: title, Stats: stats, Filename: filename, Lines: lines,
+		termWidth: terminalWidth(), headerRows: 3, render: &diffRenderCache{}}
+	hosted.offset = hosted.firstChangedVisualOffset()
+	if _, ok := runInApp(hosted); ok {
+		return
+	}
 	withExternalPrompt(func() struct{} {
 		w, h, err := term.GetSize(int(os.Stdout.Fd()))
 

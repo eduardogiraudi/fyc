@@ -143,7 +143,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		if m.modal != nil {
 			var modalCmd tea.Cmd
-			m.modal, modalCmd = m.modal.Update(msg)
+			m.modal, modalCmd = m.modal.Update(m.modalSize())
 			cmds = append(cmds, m.wrapModalCmd(modalCmd))
 		}
 
@@ -445,13 +445,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// in the frame instead of a nested program, which would leave the
 		// alternate screen, and answer through the message's reply channel.
 		m.modal = msg.Model
+		if m.transcript != nil {
+			m.modal = ui.WithMouseButtons(m.modal)
+		}
 		m.modalReply = msg.Reply
 		var cmd tea.Cmd
 		m.modal, cmd = m.modal.Update(m.modalSize())
 		cmds = append(cmds, m.wrapModalCmd(cmd), m.wrapModalCmd(m.modal.Init()))
 	case modalDoneMsg:
 		if m.modalReply != nil {
-			m.modalReply <- m.modal
+			m.modalReply <- ui.WithoutMouseButtons(m.modal)
 			m.modalReply = nil
 		}
 		m.modal = nil
@@ -629,6 +632,9 @@ func (m chatModel) altScreenView() string {
 	// The mouse is matched against what was drawn, never against a
 	// recomputation that could disagree with it.
 	m.recordHit(rows, hintRow, statusRow)
+	if m.modal != nil {
+		ui.SetMouseViewport(m.modal, height-ui.MouseViewHeight(m.modal), height)
+	}
 	return strings.Join(rows, "\n")
 }
 
