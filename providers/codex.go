@@ -766,7 +766,10 @@ loop:
 						code, _ := responseError["code"].(string)
 						switch code {
 						case "rate_limit_exceeded":
-							if !isPermanentQuotaError([]byte(data)) {
+							// Responses may echo instructions/output containing quota terms.
+							errorType, _ := responseError["type"].(string)
+							message, _ := responseError["message"].(string)
+							if errorType != "insufficient_quota" && !isPermanentQuotaError([]byte(message)) {
 								err = rateLimitedStream(err)
 							}
 						case "server_error":

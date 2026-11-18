@@ -524,6 +524,30 @@ func TestParseCodexStreamMarksTransientFailures(t *testing.T) {
 	}
 }
 
+func TestParseCodexStreamQuotaClassificationIgnoresResponseContent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		errorJSON string
+		rateLimit bool
+	}{
+		{"rate limit", `{"type":null,"code":"rate_limit_exceeded","message":"try later"}`, true},
+		{"quota code", `{"code":"insufficient_quota","message":"quota exhausted"}`, false},
+		{"quota type", `{"type":"insufficient_quota","code":"rate_limit_exceeded","message":"quota exhausted"}`, false},
+		{"quota message", `{"code":"rate_limit_exceeded","message":"insufficient_quota"}`, false},
+		{"billing message", `{"code":"rate_limit_exceeded","message":"You exceeded your current quota"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := `{"type":"response.failed","response":{"status":"failed","instructions":"Never retry insufficient_quota or exceeded your current quota errors","output":[{"type":"message","content":[{"type":"output_text","text":"insufficient_quota"}]}],"error":` + tc.errorJSON + `}}`
+			_, err := parseCodexStreamResponse(context.Background(), io.NopCloser(strings.NewReader("data: "+data+"\n\n")), false, NewSilentOutputSink())
+			if err == nil || err.Error() != "Responses API failed: "+data {
+				t.Fatalf("original failure not preserved: %v", err)
+			}
+			if errors.Is(err, ErrStreamRateLimit) != tc.rateLimit || errors.Is(err, ErrStreamTransient) != tc.rateLimit {
+				t.Fatalf("rate limit=%v, transient=%v, want %v (err=%v)", errors.Is(err, ErrStreamRateLimit), errors.Is(err, ErrStreamTransient), tc.rateLimit, err)
+			}
+		})
+	}
+}
 func TestWithStreamResendResendsTransientFailures(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		withRand(t, 0.5)
