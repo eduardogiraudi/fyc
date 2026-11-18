@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"fuckyourcli/types"
@@ -15,6 +16,8 @@ import (
 // rest collapses into a "… N more lines hidden" marker. Session replay reuses
 // it so a resumed conversation looks exactly like the live one.
 const ToolOutputRows = 2
+
+var anchorEditSummary = regexp.MustCompile(`^updated \(\+([0-9]+) -([0-9]+) lines\)$`)
 
 // toolOutputLines builds the display lines for a tool call: the (wrapped)
 // label, then the result, hard-capped to maxRows. Both renderers — the Tea
@@ -66,6 +69,12 @@ func toolOutputLines(label, res string, width, maxRows int) []string {
 		return clampLines(out, width)
 	}
 	formattedRes := res
+	firstLine, _, _ := strings.Cut(res, "\n")
+	summary := anchorEditSummary.FindStringSubmatch(firstLine)
+	if !failed && summary != nil {
+		// Fresh anchors remain in history for the model, not in the user's summary.
+		formattedRes = "+" + summary[1] + " -" + summary[2] + " lines"
+	}
 	var prettyJSON bytes.Buffer
 	if err := json.Indent(&prettyJSON, []byte(res), "", "  "); err == nil {
 		formattedRes = prettyJSON.String()
@@ -88,7 +97,21 @@ func toolOutputLines(label, res string, width, maxRows int) []string {
 		if i == len(visualLines)-1 {
 			prefix = "╰"
 		}
-		out = append(out, fmt.Sprintf("%s %s", GrayStyle.Render(prefix), BlueStyle.Render(line)))
+		rendered := BlueStyle.Render(line)
+		if !failed && summary != nil {
+			parts := strings.Split(line, " ")
+			for j, part := range parts {
+				style := BlueStyle
+				if strings.HasPrefix(part, "+") {
+					style = AddStyle
+				} else if strings.HasPrefix(part, "-") {
+					style = DeleteStyle
+				}
+				parts[j] = style.Render(part)
+			}
+			rendered = strings.Join(parts, " ")
+		}
+		out = append(out, fmt.Sprintf("%s %s", GrayStyle.Render(prefix), rendered))
 	}
 	if len(out) == 0 {
 		return nil

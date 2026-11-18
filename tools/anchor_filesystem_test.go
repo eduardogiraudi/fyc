@@ -394,3 +394,25 @@ func TestAnchorStateConcurrentResetAndReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestReplaceAnchorsSuccessSummary(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, replacement, summary, want string
+	}{
+		{"replace", "first\ntarget\nlast\n", "changed", "updated (+1 -1 lines)", "first\nchanged\nlast\n"},
+		{"insert", "first\ntarget\nlast\n", "target\nadded", "updated (+1 -0 lines)", "first\ntarget\nadded\nlast\n"},
+		{"delete", "first\ntarget\nlast\n", "", "updated (+0 -1 lines)", "first\nlast\n"},
+		{"unchanged", "first\ntarget\nlast\n", "target", "no changes needed", "first\ntarget\nlast\n"},
+		{"empty line", "first\ntarget\nlast\n", "target\n\nadded", "updated (+2 -0 lines)", "first\ntarget\n\nadded\nlast\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, path := setupAnchorFile(t, tc.content)
+			anchor := readAnchorToken(t, root, 1)
+			res := patchAnchorFile(context.Background(), root, anchor, tc.replacement)
+			if !strings.HasPrefix(res, tc.summary) {
+				t.Fatalf("result = %q; want summary %q", res, tc.summary)
+			}
+			assertAnchorFile(t, path, tc.want)
+		})
+	}
+}

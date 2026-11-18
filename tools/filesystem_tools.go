@@ -600,10 +600,20 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 	}
 
 	_, insertedOnly := globalAnchorState.CommitEdit(absPath, edited, oldLines, newLines)
-	if insertedOnly == "" {
-		return "updated (lines deleted, no new anchors)"
+	added, removed := 0, 0
+	for _, op := range editOps(edited, oldLines, newLines) {
+		switch op.opType {
+		case diffInsert:
+			added++
+		case diffDelete:
+			removed++
+		}
 	}
-	return "updated\nnew anchors:\n" + insertedOnly
+	summary := fmt.Sprintf("updated (+%d -%d lines)", added, removed)
+	if insertedOnly == "" {
+		return summary + "\nno new anchors (lines deleted)"
+	}
+	return summary + "\nnew anchors:\n" + insertedOnly
 }
 
 // executeContextSnapshotTool handles the "context_snapshot" case.
