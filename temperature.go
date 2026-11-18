@@ -51,9 +51,20 @@ func currentTemperatureLabel() string {
 }
 
 func currentProviderLine() string {
-	mode := "manual"
+	return ui.RenderProviderInfo(config.GetCurrentProviderInfo(), currentTemperatureLabel(), currentModeLabel())
+}
+
+func currentModeLabel() string {
 	if config.Get().NoAsk {
-		mode = "auto"
+		return "auto"
 	}
-	return ui.RenderProviderInfo(config.GetCurrentProviderInfo(), currentTemperatureLabel(), mode)
+	return "manual"
+}
+
+// toggleAutoModeStats flips auto mode and returns the status line for the new
+// mode: the ctrl+o shortcut and a click on the [Mode: …] badge share it, so the
+// two paths can never disagree on what the switch did.
+func toggleAutoModeStats() ui.StreamStatsMsg {
+	config.SetNoAsk(!config.Get().NoAsk)
+	return ui.StreamStatsMsg{ProviderInfo: currentProviderLine()}
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
 
@@ -168,15 +169,42 @@ func RenderProviderInfo(providerInfo, temperature, mode string) string {
 	return fmt.Sprintf("%s %s %s",
 		InfoStyle.Render("[Provider: ")+TitleStyle.Render(providerInfo)+InfoStyle.Render("]"),
 		InfoStyle.Render("[Temp: ")+TitleStyle.Render(temperature)+InfoStyle.Render("]"),
-		InfoStyle.Render("[Mode: ")+TitleStyle.Render(mode)+InfoStyle.Render("]"),
+		ModeSegment(mode),
 	)
+}
+
+// ModeSegment renders the trailing "[Mode: x]" part of RenderProviderInfo. The
+// alt-screen chat draws it on its own: in that mode it is a button.
+func ModeSegment(mode string) string {
+	return InfoStyle.Render("[Mode: ") + TitleStyle.Render(mode) + InfoStyle.Render("]")
+}
+
+// SplitModeSegment separates the mode badge from a status line built by
+// RenderProviderInfo: prefix is everything in front of it, mode the bare label
+// and badge the badge text without styling (a hover repaints it on its own).
+// Splitting by display columns keeps the prefix byte-exact even when a provider
+// name contains wide runes.
+func SplitModeSegment(line string) (prefix, mode, badge string, ok bool) {
+	const marker = "[Mode: "
+	plain := ansi.Strip(line)
+	idx := strings.Index(plain, marker)
+	if idx < 0 || !strings.HasSuffix(plain, "]") {
+		return line, "", "", false
+	}
+	mode = plain[idx+len(marker) : len(plain)-1]
+	if mode == "" {
+		return line, "", "", false
+	}
+	badge = plain[idx:]
+	col := ansi.StringWidth(plain[:idx])
+	return strings.TrimRight(ansi.Cut(line, 0, col), " "), mode, badge, true
 }
 
 // TipsBlock returns the start-up hints as one rendered block: the caller draws
 // it itself (the alt-screen chat transcript seeds it into the view).
 func TipsBlock() string {
 	return TipStyle.Render("Type /help for commands  •  exit to quit  •  enter to send  •  /sub on to enable subagents spawning") + "\n" +
-		TipStyle.Render("ctrl+o or /auto to enable/disable auto mode")
+		TipStyle.Render("ctrl+o, /auto or a click on the mode badge to enable/disable auto mode")
 }
 
 // StartupHeaderBlock returns the start-up banner rendered for the current

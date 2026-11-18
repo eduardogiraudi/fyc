@@ -64,6 +64,16 @@ type chatModel struct {
 	// empty when there is nothing to say.
 	copyNotice    string
 	copyNoticeErr bool
+
+	// hit is the geometry of the clickable parts of the last frame (the mode
+	// badge and the "rows below" hint). It hangs off a pointer because View
+	// runs on a copy of the model: the mouse has to be matched against the rows
+	// that are on screen. Nil in the inline REPL, which owns no frame.
+	hit *frameHit
+
+	// hover is the clickable part under the pointer: it is what highlights the
+	// button and tells the user the part can be clicked.
+	hover hoverTarget
 }
 
 func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []string, sp ui.SuggestionProvider) chatModel {
@@ -84,6 +94,7 @@ func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []s
 // which the alternate screen would otherwise hide.
 func (m *chatModel) enableAltScreen(seed []string) {
 	m.transcript = &transcriptState{}
+	m.hit = &frameHit{}
 	for _, block := range seed {
 		m.transcript.Append(block)
 	}
@@ -157,11 +168,30 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.transcript == nil {
 			break
 		}
+		// All-motion reporting delivers pointer moves with no button pressed:
+		// that is what lets the status-bar parts behave like buttons.
+		if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
+			m.hover = m.hitAt(msg.X, msg.Y)
+			return m, nil
+		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			m.transcript.ScrollUp(mouseScrollRows)
 		case tea.MouseButtonWheelDown:
 			m.transcript.ScrollDown(mouseScrollRows)
+		}
+		m.dropStaleHover()
+		// A press that lands on a button is a click, not the start of a text
+		// selection: the drag would otherwise highlight the status bar too.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			switch m.hitAt(msg.X, msg.Y) {
+			case hoverMode:
+				return m, m.toggleAutoModeCmd()
+			case hoverScrollBack:
+				m.transcript.Follow()
+				m.hover = hoverNone
+				return m, nil
+			}
 		}
 		if msg.Button == tea.MouseButtonLeft || msg.Action == tea.MouseActionRelease {
 			switch msg.Action {
@@ -403,6 +433,15 @@ func (m chatModel) View() string {
 // REPL it is the whole view (the transcript lives in the scrollback); in
 // alt-screen mode it is the frame pinned to the bottom.
 func (m chatModel) liveParts() []string {
+	parts, _ := m.livePartsIndexed()
+	return parts
+}
+
+// livePartsIndexed also reports which part is the status line (provider,
+// temperature, mode), because the mode badge is clickable in alt-screen mode
+// and its screen row has to be computed. It is -1 when no status line is drawn.
+func (m chatModel) livePartsIndexed() ([]string, int) {
+	statusIdx := -1
 	var parts []string
 	if m.reasoning.Active() {
 		parts = append(parts, m.reasoning.View())
@@ -436,7 +475,8 @@ func (m chatModel) liveParts() []string {
 		parts = append(parts, ui.DimStyle.Render("generating… enter disabled, ctrl+c to interrupt"))
 	}
 	if m.statsProviderInfo != "" {
-		parts = append(parts, ui.InfoStyle.Render(m.statsProviderInfo))
+		statusIdx = len(parts)
+		parts = append(parts, m.providerStatusLine())
 	}
 	if m.statsTokenText != "" {
 		parts = append(parts, ui.InfoStyle.Render(m.statsTokenText))
@@ -458,7 +498,21 @@ func (m chatModel) liveParts() []string {
 	} else {
 		parts = append(parts, m.input.SetSubmitDisabled(m.generating).View())
 	}
-	return parts
+	return parts, statusIdx
+}
+
+// providerStatusLine draws the provider/temperature/mode row. In alt-screen
+// mode the mode segment is split off and drawn as a button: clicking it flips
+// auto mode, and the highlight says so before the click.
+func (m chatModel) providerStatusLine() string {
+	if m.transcript == nil {
+		return ui.InfoStyle.Render(m.statsProviderInfo)
+	}
+	prefix, mode, badge, ok := ui.SplitModeSegment(m.statsProviderInfo)
+	if !ok {
+		return ui.InfoStyle.Render(m.statsProviderInfo)
+	}
+	return prefix + " " + ui.HoverButton(badge, ui.ModeSegment(mode), m.hover == hoverMode)
 }
 
 // altScreenView lays out the full-screen frame: the transcript on top, the live
@@ -466,8 +520,19 @@ func (m chatModel) liveParts() []string {
 // clamped to exactly the terminal height, so the renderer never has to scroll
 // the alt screen (which would shift the whole UI).
 func (m chatModel) altScreenView() string {
-	live := ui.ClampBlock(strings.TrimRight(strings.Join(m.liveParts(), "\n"), "\n"), m.width)
+	parts, statusIdx := m.livePartsIndexed()
+	live := ui.ClampBlock(strings.TrimRight(strings.Join(parts, "\n"), "\n"), m.width)
 	liveRows := strings.Split(live, "\n")
+	// Row of the status line inside the live area, computed with the same
+	// joining rules: clamping never changes a line count, so the click target
+	// lands on the badge that is actually drawn.
+	statusInLive := -1
+	if statusIdx >= 0 {
+		statusInLive = 0
+		if prefix := strings.Join(parts[:statusIdx], "\n"); prefix != "" {
+			statusInLive = strings.Count(prefix, "\n") + 1
+		}
+	}
 
 	height := m.height
 	if height <= 0 {
@@ -478,7 +543,8 @@ func (m chatModel) altScreenView() string {
 	if budget > 3 && m.transcript.ScrolledUp() {
 		// The hint needs a row of its own, between the transcript and the input.
 		budget--
-		indicator = ui.DimStyle.Render(fmt.Sprintf("↓ %d rows below · ctrl+end to follow", m.transcript.offset))
+		hint := fmt.Sprintf("↓ %d rows below · click or ctrl+end to follow", m.transcript.offset)
+		indicator = ui.HoverButton(hint, ui.DimStyle.Render(hint), m.hover == hoverScrollBack)
 	}
 
 	var rows []string
@@ -497,15 +563,28 @@ func (m chatModel) altScreenView() string {
 	if pad := height - len(rows) - len(liveRows) - indicatorRows; pad > 0 {
 		rows = append(rows, make([]string, pad)...)
 	}
+	// Rows of the clickable parts, before the tail trim below can shift them.
+	hintRow := -1
 	if indicator != "" {
+		hintRow = len(rows)
 		rows = append(rows, indicator)
 	}
 	rows = append(rows, liveRows...)
+	statusRow := -1
+	if statusInLive >= 0 {
+		statusRow = len(rows) - len(liveRows) + statusInLive
+	}
 	// A live area taller than the screen (a long suggestion list) still has to
 	// show the input: keep the tail.
 	if len(rows) > height {
+		dropped := len(rows) - height
 		rows = rows[len(rows)-height:]
+		hintRow -= dropped
+		statusRow -= dropped
 	}
+	// The mouse is matched against what was drawn, never against a
+	// recomputation that could disagree with it.
+	m.recordHit(rows, hintRow, statusRow)
 	return strings.Join(rows, "\n")
 }
 
@@ -712,6 +791,20 @@ func (m *chatModel) scheduleSpinnerTick() tea.Cmd {
 	}
 	m.spinnerTickScheduled = true
 	return ui.SpinnerTickCmd()
+}
+
+// dropStaleHover clears the pointer from a part that went away with the frame:
+// the "rows below" hint disappears as soon as the reader returns to the live
+// output.
+func (m *chatModel) dropStaleHover() {
+	if m.hover == hoverScrollBack && !m.transcript.ScrolledUp() {
+		m.hover = hoverNone
+	}
+}
+
+// toggleAutoModeCmd flips auto mode, the same session switch ctrl+o performs.
+func (m *chatModel) toggleAutoModeCmd() tea.Cmd {
+	return func() tea.Msg { return toggleAutoModeStats() }
 }
 
 func reasoningHeight(termHeight int) int {

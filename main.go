@@ -282,21 +282,7 @@ func main() {
 	persistedHistory := loadHistoryEntries()
 
 	toggleAutoModeCmd := func() tea.Cmd {
-		cfg := config.Get()
-		current := cfg.NoAsk
-		config.SetNoAsk(!current)
-		modeStr := "manual"
-		if !current {
-			modeStr = "auto"
-		}
-		providerInfo := config.GetCurrentProviderInfo()
-		providerLine := ui.RenderProviderInfo(providerInfo, currentTemperatureLabel(), modeStr)
-		return func() tea.Msg {
-			return ui.StreamStatsMsg{
-				ProviderInfo: providerLine,
-				TokenStats:   "",
-			}
-		}
+		return func() tea.Msg { return toggleAutoModeStats() }
 	}
 
 	ui.SetCtrlOHandler(toggleAutoModeCmd)
@@ -310,9 +296,11 @@ func main() {
 		chat.enableAltScreen(altSeed)
 		// Mouse reporting is what turns a wheel turn into a MouseMsg: without
 		// it the terminal sends arrow keys and the wheel walks the input
-		// history. Cell motion (button-event mode) reports the wheel, not
-		// every pointer move.
-		opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		// history. All-motion (not just button-event) reporting is what the
+		// status bar needs: the pointer moves with no button pressed are the
+		// hover that tells the user the mode badge and the "rows below" hint
+		// are clickable.
+		opts = append(opts, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	}
 	prog := tea.NewProgram(chat, opts...)
 	chatSink.AttachProgram(prog)

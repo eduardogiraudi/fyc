@@ -78,9 +78,9 @@ func ResumeExternalPrompt() {
 		_ = p.RestoreTerminal()
 		if mouse {
 			// RestoreTerminal re-enters the alternate screen but leaves mouse
-			// reporting off: without this the wheel stops working after the
-			// first nested prompt.
-			p.Send(tea.EnableMouseCellMotion())
+			// reporting off: without this the wheel stops working (and the
+			// hover goes dead) after the first nested prompt.
+			p.Send(tea.EnableMouseAllMotion())
 		}
 		p.Send(StreamResumeMsg{})
 	}
