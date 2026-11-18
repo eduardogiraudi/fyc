@@ -75,6 +75,75 @@ func TestSaveHistoryEntrySkipsEmptyAndTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestHistoryPreservesLargeMultilinePrompts(t *testing.T) {
+	path := withHome(t)
+	s := &ChatSession{}
+	large := strings.Repeat("log: \"errore\" \\ percorso 日本語\r\n\n", 4000) + "fine"
+	want := []string{"prima", large, "dopo\n\n  indentato\nultima"}
+	for _, entry := range want {
+		s.saveHistoryEntry(entry)
+		s.saveHistoryEntry(entry)
+	}
+	got := loadHistoryEntries()
+	if len(got) != len(want) {
+		t.Fatalf("loaded %d prompts, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("prompt %d changed after persistence", i)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("history permissions = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestHistoryMigratesLegacyEntries(t *testing.T) {
+	path := withHome(t)
+	legacy := "prima\n\n[\"literal JSON\"]\nprima\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &ChatSession{}
+	s.saveHistoryEntry("nuovo\nmultilinea")
+	want := []string{"prima", "[\"literal JSON\"]", "prima", "nuovo\nmultilinea"}
+	got := loadHistoryEntries()
+	if len(got) != len(want) {
+		t.Fatalf("history = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("entry %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), historyFileHeader) {
+		t.Fatal("legacy history was not migrated")
+	}
+}
+
+func TestHistoryCapCountsPromptsNotLines(t *testing.T) {
+	withHome(t)
+	s := &ChatSession{}
+	for i := 0; i < maxHistoryEntries+2; i++ {
+		s.saveHistoryEntry(itoa(i) + "\nsecond line\n\nlast line")
+	}
+	got := loadHistoryEntries()
+	if len(got) != maxHistoryEntries {
+		t.Fatalf("loaded %d prompts, want %d", len(got), maxHistoryEntries)
+	}
+	if got[0] != "2\nsecond line\n\nlast line" || got[len(got)-1] != itoa(maxHistoryEntries+1)+"\nsecond line\n\nlast line" {
+		t.Fatal("cap did not retain the newest whole prompts")
+	}
+}
+
 // itoa is a tiny helper to avoid importing strconv just for the tests.
 func itoa(n int) string {
 	if n == 0 {

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fuckyourcli/config"
 	"fuckyourcli/modes"
 	"fuckyourcli/store"
@@ -12,9 +13,12 @@ import (
 	"strings"
 )
 
-// maxHistoryEntries caps the persistent input history (one line per submitted
-// prompt). Older entries are dropped from the front.
+// maxHistoryEntries caps the persistent input history by submitted prompts,
+// not by lines. Older entries are dropped from the front.
 const maxHistoryEntries = 500
+
+// The header distinguishes encoded entries from legacy plain-text prompts.
+const historyFileHeader = "# fyc input history v1\n"
 
 // historyFilePath is the persistent input-history file (~/.fyc_history).
 func historyFilePath() string {
@@ -25,17 +29,24 @@ func historyFilePath() string {
 	return filepath.Join(home, ".fyc_history")
 }
 
-// readHistoryFile returns the non-empty lines of path, capped to the most
-// recent maxHistoryEntries.
+// readHistoryFile returns whole prompts, capped to the most recent entries.
+// Legacy files are still read as one entry per line.
 func readHistoryFile(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if line != "" {
-			out = append(out, line)
+	if strings.HasPrefix(string(data), historyFileHeader) {
+		if err := json.Unmarshal(data[len(historyFileHeader):], &out); err != nil {
+			store.Notice("history: %v", err)
+			return nil
+		}
+	} else {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line != "" {
+				out = append(out, line)
+			}
 		}
 	}
 	if len(out) > maxHistoryEntries {
@@ -62,8 +73,8 @@ func loadHistoryEntries() []string {
 	return dedupConsecutive(readHistoryFile(historyFilePath()))
 }
 
-// saveHistoryEntry appends a single line to the persistent history file, keeping
-// the file capped at maxHistoryEntries and skipping consecutive duplicates.
+// saveHistoryEntry persists a whole prompt, keeping the file capped at
+// maxHistoryEntries and skipping consecutive duplicates.
 func (s *ChatSession) saveHistoryEntry(entry string) {
 	entry = strings.TrimRight(entry, "\r\n")
 	if entry == "" {
@@ -78,7 +89,12 @@ func (s *ChatSession) saveHistoryEntry(entry string) {
 	if len(entries) > maxHistoryEntries {
 		entries = entries[len(entries)-maxHistoryEntries:]
 	}
-	if err := store.WriteFile(path, []byte(strings.Join(entries, "\n")+"\n"), 0o600); err != nil {
+	data, err := json.Marshal(entries)
+	if err != nil {
+		store.Notice("history: %v", err)
+		return
+	}
+	if err := store.WriteFile(path, append([]byte(historyFileHeader), data...), 0o600); err != nil {
 		store.Notice("history: %v", err)
 	}
 }
