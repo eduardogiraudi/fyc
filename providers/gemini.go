@@ -514,6 +514,9 @@ loop:
 			if usage, ok := response["usageMetadata"].(map[string]interface{}); ok {
 				if promptTokens, ok := usage["promptTokenCount"].(float64); ok && promptTokens > 0 {
 					result.PromptTokens = int(promptTokens)
+					// promptTokenCount is the total effective prompt: it already
+					// includes the cached content.
+					result.ContextTokens = int(promptTokens)
 				}
 				if candidatesTokens, ok := usage["candidatesTokenCount"].(float64); ok && candidatesTokens > 0 {
 					result.CompletionTokens = int(candidatesTokens)

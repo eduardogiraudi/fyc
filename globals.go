@@ -54,10 +54,17 @@ type ChatSession struct {
 	// no instruction file or the feature is disabled.
 	ProjectContext string
 
-	LastCtx int
+	// lastProviderTokens is the provider's own measurement of the context the
+	// last request carried (total prompt tokens, cached part included) and
+	// lastProviderMessages is the history length it covered. The compaction
+	// trigger trusts it when it is plausible next to the local estimate and
+	// falls back to the estimate otherwise (see contextTokens in tokens.go).
+	lastProviderTokens   int
+	lastProviderMessages int
 
 	// Auto-compaction runtime guard state (not persisted). lastAutoCompactSize
-	// is the estimated context size right after the last auto-compaction;
+	// is the context size right after the last auto-compaction, in the unit the
+	// trigger used (see rescaleContextTokens);
 	// autoCompactSuppressed latches on failures or insufficient headroom, so
 	// automatic checks do not retry at every tool-batch boundary.
 	lastAutoCompactSize   int

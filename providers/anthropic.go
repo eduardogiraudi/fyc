@@ -274,23 +274,44 @@ type anthropicStreamEvent struct {
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Message struct {
-		Usage struct {
-			InputTokens              int `json:"input_tokens"`
-			OutputTokens             int `json:"output_tokens"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
+		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
-	Usage struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
+	Usage anthropicUsage `json:"usage"`
 	Error struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// anthropicUsage is the usage block of message_start / message_delta. Anthropic
+// reports the prompt in pieces: input_tokens counts only the uncached tail,
+// while the cached prefix comes back as cache reads and cache writes.
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// apply merges one usage block into the stream result. ContextTokens is the
+// whole prompt (input + cache reads + cache writes): a threshold compared with
+// input_tokens alone would never see the cached context.
+func (u anthropicUsage) apply(result *types.StreamResult) {
+	if u.InputTokens > 0 {
+		result.PromptTokens = u.InputTokens
+	}
+	if u.OutputTokens > 0 {
+		result.CompletionTokens = u.OutputTokens
+	}
+	if u.CacheReadInputTokens > 0 {
+		result.CachedTokens = u.CacheReadInputTokens
+	}
+	if u.CacheCreationInputTokens > 0 {
+		result.CacheWriteTokens = u.CacheCreationInputTokens
+	}
+	if total := result.PromptTokens + result.CachedTokens + result.CacheWriteTokens; total > 0 {
+		result.ContextTokens = total
+	}
 }
 
 // StreamChat streams a response from Anthropic Messages API.
@@ -646,14 +667,7 @@ loop:
 
 			switch event.Type {
 			case "message_start":
-				result.PromptTokens = event.Message.Usage.InputTokens
-				result.CompletionTokens = event.Message.Usage.OutputTokens
-				if event.Message.Usage.CacheReadInputTokens > 0 {
-					result.CachedTokens = event.Message.Usage.CacheReadInputTokens
-				}
-				if event.Message.Usage.CacheCreationInputTokens > 0 {
-					result.CacheWriteTokens = event.Message.Usage.CacheCreationInputTokens
-				}
+				event.Message.Usage.apply(result)
 			case "content_block_start":
 				if event.ContentBlock.Type == "tool_use" {
 					toolCalls[event.Index] = &types.ToolCall{
@@ -699,18 +713,7 @@ loop:
 				} else if event.Delta.StopReason != "" {
 					result.FinishReason = event.Delta.StopReason
 				}
-				if event.Usage.InputTokens > 0 {
-					result.PromptTokens = event.Usage.InputTokens
-				}
-				if event.Usage.OutputTokens > 0 {
-					result.CompletionTokens = event.Usage.OutputTokens
-				}
-				if event.Usage.CacheReadInputTokens > 0 {
-					result.CachedTokens = event.Usage.CacheReadInputTokens
-				}
-				if event.Usage.CacheCreationInputTokens > 0 {
-					result.CacheWriteTokens = event.Usage.CacheCreationInputTokens
-				}
+				event.Usage.apply(result)
 			case "error":
 				err := fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
 				if event.Error.Type == "rate_limit_error" {

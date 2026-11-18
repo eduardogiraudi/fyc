@@ -268,3 +268,24 @@ func TestAnthropicPromptCachingExtraBodyMergedAndDropped(t *testing.T) {
 		t.Fatalf("the fallback must drop the extra_body entry too: %s", bodies[len(bodies)-1])
 	}
 }
+
+// A cache hit reports the cached prefix separately: input_tokens alone counts
+// only the uncached tail, so the context size must sum all three figures.
+func TestAnthropicContextTokensIncludeCache(t *testing.T) {
+	stream := anthropicSSE("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":50,"output_tokens":1,"cache_read_input_tokens":100000}}}`) +
+		anthropicSSE("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+		anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`) +
+		anthropicSSE("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+		anthropicSSE("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`) +
+		anthropicSSE("message_stop", `{"type":"message_stop"}`)
+	res, err := parseAnthropicStreamResponse(context.Background(), nopCloser{strings.NewReader(stream)}, NewSilentOutputSink())
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.PromptTokens != 50 || res.CachedTokens != 100000 {
+		t.Fatalf("usage: %+v", res)
+	}
+	if res.ContextTokens != 100050 {
+		t.Fatalf("contextTokens = %d, want the whole prompt 100050", res.ContextTokens)
+	}
+}

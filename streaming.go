@@ -131,6 +131,7 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 			return
 		}
 
+		measuredMessages := len(s.ChatHistory)
 		appendAssistantStreamResult(s, result, opts.includeReasoningSignature, cfg.Model)
 
 		if result.Interrupted {
@@ -144,7 +145,9 @@ func streamProviderLoop(s *ChatSession, opts streamOptions, cfg config.Config, p
 			sinkLine(sink, ui.TipStyle.Render("[truncated response: stop_reason="+result.FinishReason+"]"))
 		}
 
-		s.LastCtx = result.PromptTokens
+		// Keep the provider's own measure of the context it just received: it
+		// drives the compaction trigger (see contextTokens in tokens.go).
+		s.lastProviderTokens, s.lastProviderMessages = result.ContextTokens, measuredMessages
 		lastResult = result
 
 		if result.FinishReason != "tool_calls" && len(result.ToolCalls) == 0 {
@@ -511,8 +514,10 @@ func responseTruncated(reason string) bool {
 }
 
 // tokenStatsLine returns the formatted string with token stats.
-// Provider tokens are for information only; the context estimate is always
-// calculated locally (see tokens.go) and shown alongside as "context".
+// tokenStatsLine returns the formatted string with token stats.
+// "prompt" keeps the provider's wire semantics (Anthropic counts only the
+// uncached tail there); "context" is the whole prompt, cached part included, and
+// is the figure the compaction threshold is compared with (see tokens.go).
 func tokenStatsLine(result *types.StreamResult, s *ChatSession) string {
 	if result == nil {
 		return ""
@@ -532,8 +537,16 @@ func tokenStatsLine(result *types.StreamResult, s *ChatSession) string {
 			ui.InfoStyle.Render("tokens"),
 		)
 	}
+	contextInfo := ""
+	if result.ContextTokens > 0 && result.ContextTokens != result.PromptTokens {
+		contextInfo = fmt.Sprintf(" %s %s %s",
+			ui.InfoStyle.Render("| context:"),
+			ui.OkStyle.Render(fmt.Sprintf("%d", result.ContextTokens)),
+			ui.InfoStyle.Render("tokens"),
+		)
+	}
 
-	return fmt.Sprintf("%s %s %s %s %s %s%s",
+	return fmt.Sprintf("%s %s %s %s %s %s%s%s",
 		ui.InfoStyle.Render("Tokens:"),
 		ui.OkStyle.Render(fmt.Sprintf("%d", result.PromptTokens)),
 		ui.InfoStyle.Render("prompt"),
@@ -541,5 +554,6 @@ func tokenStatsLine(result *types.StreamResult, s *ChatSession) string {
 		ui.OkStyle.Render(fmt.Sprintf("%d", result.CompletionTokens)),
 		ui.InfoStyle.Render("completion"),
 		cacheInfo,
+		contextInfo,
 	)
 }

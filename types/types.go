@@ -169,6 +169,13 @@ type StreamResult struct {
 	// CacheWriteTokens is the number of prompt tokens written to a provider-side
 	// prompt cache by this request (Anthropic cache_creation_input_tokens).
 	CacheWriteTokens int
+	// ContextTokens is the whole prompt the request carried, in provider tokens:
+	// the figure the compaction trigger compares with its threshold. Providers
+	// that report the cached part separately (Anthropic: input_tokens,
+	// cache_creation_input_tokens, cache_read_input_tokens) sum it here; the
+	// others already count it inside their prompt count. Zero when the provider
+	// reported no usage.
+	ContextTokens int
 	// Interrupted is true if generation was interrupted via context cancel
 	Interrupted bool
 }

@@ -106,3 +106,79 @@ func TestCurrentContextTokensIncludesHistoryAndTools(t *testing.T) {
 		t.Errorf("got %d, want >= 150 (history + tools)", got)
 	}
 }
+
+// contextHistory builds a history whose local estimate is roughly tokens.
+func contextHistory(tokens int) []types.Message {
+	return []types.Message{{Role: "user", Content: strings.Repeat("a", tokens*4)}}
+}
+
+func TestContextTokensUsesProviderMeasurementWhenPlausible(t *testing.T) {
+	// ~1000 local tokens of history against a provider count of 2000: a factor
+	// of two is normal tokenizer noise, so the provider drives the trigger.
+	s := &ChatSession{ChatHistory: contextHistory(1000), lastProviderTokens: 2000, lastProviderMessages: 1}
+	if got := contextTokens(s); got != 2000 {
+		t.Fatalf("contextTokens = %d, want the provider measurement 2000", got)
+	}
+}
+
+func TestContextTokensFallsBackWhenProviderMeasurementIsImplausible(t *testing.T) {
+	// The provider reports 345 tokens (the uncached tail of a cached prompt, a
+	// per-chunk count, a gateway echoing the last message) while the history is
+	// ~100k tokens locally: an order-of-magnitude gap is not a tokenizer.
+	s := &ChatSession{ChatHistory: contextHistory(100000), lastProviderTokens: 345, lastProviderMessages: 1}
+	if got, want := contextTokens(s), currentContextTokens(s); got != want {
+		t.Fatalf("contextTokens = %d, want the local estimate %d", got, want)
+	}
+}
+
+func TestContextTokensAddsMessagesAppendedSinceTheRequest(t *testing.T) {
+	// The measurement covers the request, not the response and its tool results:
+	// those are appended afterwards and only the local estimate can size them.
+	s := &ChatSession{
+		ChatHistory:          append(contextHistory(1000), types.Message{Role: "tool", Content: strings.Repeat("b", 400)}),
+		lastProviderTokens:   2000,
+		lastProviderMessages: 1,
+	}
+	want := 2000 + estimateMessageTokens(s.ChatHistory[1])
+	if got := contextTokens(s); got != want {
+		t.Fatalf("contextTokens = %d, want %d (measurement + appended messages)", got, want)
+	}
+}
+
+func TestContextTokensDiscardsMeasurementAfterHistoryRewrite(t *testing.T) {
+	// A rewritten history (compaction, resume) invalidates a measurement taken
+	// over a longer prefix.
+	s := &ChatSession{ChatHistory: contextHistory(1000), lastProviderTokens: 4000, lastProviderMessages: 5}
+	if got := providerContextTokens(s); got != 0 {
+		t.Fatalf("providerContextTokens = %d, want 0", got)
+	}
+	if got, want := contextTokens(s), currentContextTokens(s); got != want {
+		t.Fatalf("contextTokens = %d, want the local estimate %d", got, want)
+	}
+}
+
+func TestRescaleContextTokens(t *testing.T) {
+	// A local result is reported in the unit the trigger used.
+	if got := rescaleContextTokens(1000, 4000, 2000); got != 2000 {
+		t.Fatalf("rescale = %d, want 2000", got)
+	}
+	if got := rescaleContextTokens(1000, 3000, 3000); got != 1000 {
+		t.Fatalf("identity rescale = %d, want 1000", got)
+	}
+	if got := rescaleContextTokens(1000, 0, 0); got != 1000 {
+		t.Fatalf("no-measurement rescale = %d, want 1000", got)
+	}
+}
+
+func TestTokenStatsLineShowsFullContextWhenItDiffersFromPrompt(t *testing.T) {
+	// Anthropic reports the cached prompt separately: "prompt" alone would make
+	// the context look tiny next to the compaction threshold.
+	line := tokenStatsLine(&types.StreamResult{PromptTokens: 50, CompletionTokens: 7, CachedTokens: 100000, ContextTokens: 100050}, nil)
+	if !strings.Contains(line, "context:") || !strings.Contains(line, "100050") {
+		t.Fatalf("whole context missing from the stats line: %s", line)
+	}
+	plain := tokenStatsLine(&types.StreamResult{PromptTokens: 50, CompletionTokens: 7, ContextTokens: 50}, nil)
+	if strings.Contains(plain, "context:") {
+		t.Fatalf("an identical prompt/context must not be repeated: %s", plain)
+	}
+}

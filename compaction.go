@@ -2,8 +2,10 @@
 //
 // compactContext summarizes the conversation into a structured handoff and
 // replaces the history with it. maybeAutoCompact runs it automatically when the
-// locally estimated context size crosses the configured threshold, with a guard
-// to avoid looping when compaction cannot bring the context back under it.
+// context size crosses the configured threshold — the provider's own prompt-token
+// measurement when it is available and plausible, the local estimate otherwise
+// (see contextTokens) — with a guard to avoid looping when compaction cannot
+// bring the context back under it.
 package main
 
 import (
@@ -388,7 +390,11 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 	if s == nil {
 		return 0, 0, res, fmt.Errorf("no session")
 	}
-	before = currentContextTokens(s)
+	// before is the size that triggered (or that the user is asking about): the
+	// provider measurement when it is trustworthy. The result cannot be measured
+	// by any provider, so it stays local and is rescaled to the same unit below.
+	localBefore := currentContextTokens(s)
+	before = contextTokens(s)
 	if err := ctx.Err(); err != nil {
 		return before, before, res, err
 	}
@@ -460,7 +466,7 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 		})
 	}
 	after = estimateHistoryTokens(pruneScreenshotImages(history, config.EffectiveMaxMedia())) + estimateToolsTokens(s.getToolsForAI())
-	if retainTurn && after >= before {
+	if retainTurn && after >= localBefore {
 		return before, before, res, fmt.Errorf("compaction did not reduce the context")
 	}
 	// Commit only after validation; failures and cancellation keep history intact.
@@ -468,11 +474,15 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 		return before, before, res, err
 	}
 	s.ChatHistory = history
+	// The measurement describes the history that just disappeared.
+	s.lastProviderTokens, s.lastProviderMessages = 0, 0
 	s.persistentModeInjected = ""
 	if retainTurn && s.turnModeOverride == nil && s.CurrentMode != nil && config.Get().Provider != config.ProviderGemini {
 		s.persistentModeInjected = s.CurrentMode.Name
 	}
-	return before, after, res, nil
+	// The result is a local estimate: report it in the unit before was measured
+	// in, so both numbers of the message share a unit.
+	return before, rescaleContextTokens(after, before, localBefore), res, nil
 }
 
 func autoCompactDecision(cur, threshold int, suppressed bool) (run bool, resetGuard bool) {
@@ -501,7 +511,7 @@ func maybeAutoCompactWith(ctx context.Context, s *ChatSession, sink types.Output
 		return false
 	}
 	threshold := config.EffectiveCompactionThreshold()
-	cur := currentContextTokens(s)
+	cur := contextTokens(s)
 	if retainTurn && s.autoCompactSuppressed && cur >= threshold*3/4 {
 		return false
 	}

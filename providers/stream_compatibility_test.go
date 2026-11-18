@@ -101,6 +101,9 @@ func TestOpenAICompatibleEOFSafety(t *testing.T) {
 			if tc.name == "text_with_usage" && (result.PromptTokens != 12 || result.CompletionTokens != 3) {
 				t.Fatalf("usage lost: %+v", result)
 			}
+			if tc.name == "text_with_usage" && result.ContextTokens != 12 {
+				t.Fatalf("prompt_tokens must be the whole prompt: %+v", result)
+			}
 		})
 	}
 }

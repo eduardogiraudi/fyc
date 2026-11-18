@@ -387,6 +387,38 @@ func TestAutoCompactIneffectiveSummaryStaysSuppressedUntilHeadroom(t *testing.T)
 	}
 }
 
+// The provider's own prompt-token count is the trigger: the local estimator
+// under-counts this history, so only the measurement crosses the threshold.
+func TestAutoCompactTriggersOnProviderMeasurement(t *testing.T) {
+	compactionTestConfig(t, true, false, 8000)
+	history := turnCompactionHistory()
+	s := &ChatSession{ChatHistory: history, lastProviderTokens: 20000, lastProviderMessages: len(history)}
+	respond := func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
+		return compactionResult{Summary: "summary"}, nil
+	}
+	if !maybeAutoCompactWith(context.Background(), s, providers.NewSilentOutputSink(), false, respond) {
+		t.Fatal("a provider measurement above the threshold must trigger compaction")
+	}
+	if s.lastProviderTokens != 0 || s.lastProviderMessages != 0 {
+		t.Fatal("the measurement must be dropped once the history it described is gone")
+	}
+}
+
+// An implausible measurement is a reporting quirk, not a small context: the
+// local estimate stays in charge and nothing compacts.
+func TestAutoCompactIgnoresImplausibleProviderMeasurement(t *testing.T) {
+	compactionTestConfig(t, true, false, 8000)
+	history := turnCompactionHistory()
+	s := &ChatSession{ChatHistory: history, lastProviderTokens: 345, lastProviderMessages: len(history)}
+	respond := func(context.Context, []types.Message, *ChatSession) (compactionResult, error) {
+		t.Fatal("must not compact on an implausible measurement")
+		return compactionResult{}, nil
+	}
+	if maybeAutoCompactWith(context.Background(), s, providers.NewSilentOutputSink(), false, respond) {
+		t.Fatal("implausible measurement must not trigger compaction")
+	}
+}
+
 func TestCompactedHistoryPersistence(t *testing.T) {
 	compactionTestConfig(t, true, true, 8000)
 	ws := testWorkspace(t)

@@ -519,6 +519,9 @@ loop:
 
 			if response.Usage != nil {
 				result.PromptTokens = response.Usage.PromptTokens
+				// prompt_tokens is the whole prompt: cached_tokens (in
+				// prompt_tokens_details) is only a subset of it.
+				result.ContextTokens = response.Usage.PromptTokens
 				result.CompletionTokens = response.Usage.CompletionTokens
 				if response.Usage.PromptTokensDetails != nil {
 					result.CachedTokens = response.Usage.PromptTokensDetails.CachedTokens

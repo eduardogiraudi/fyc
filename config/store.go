@@ -7,8 +7,10 @@ import (
 	"fuckyourcli/types"
 )
 
-// DefaultCompactionThreshold is the estimated context size (in tokens) above
-// which auto-compaction triggers when no explicit threshold is configured.
+// DefaultCompactionThreshold is the context size (in tokens) above which
+// auto-compaction triggers when no explicit threshold is configured. The size is
+// the provider's own prompt-token count when it is plausible, the local estimate
+// otherwise (see contextTokens in tokens.go).
 const DefaultCompactionThreshold = 32000
 
 // DefaultMaxMedia bounds image attachments when no valid limit is configured.
@@ -114,7 +116,8 @@ func SetCompactionEnabled(enabled bool) {
 	config.CompactionEnabled = enabled
 }
 
-// SetCompactionThreshold sets the threshold (in estimated tokens) for auto-compaction.
+// SetCompactionThreshold sets the context size (in tokens) above which
+// auto-compaction triggers.
 func SetCompactionThreshold(threshold int) {
 	config.CompactionThreshold = threshold
 }

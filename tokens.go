@@ -1,10 +1,17 @@
-// Package main — local token estimation.
+// Package main — context size and local token estimation.
 //
-// The compaction threshold is ALWAYS evaluated against a locally computed
-// estimate: provider-reported token counts (StreamResult.PromptTokens,
-// s.LastCtx) are only shown as informational stats and never drive the trigger,
-// because some providers report only the last request's tokens rather than the
-// whole context size.
+// The compaction trigger measures the context the way the provider does: the
+// prompt tokens reported by the last request (types.StreamResult.ContextTokens),
+// extended with the locally estimated size of the messages appended since. The
+// local estimate (a chars/4 BPE approximation) is only a fallback when there is
+// no measurement and a sanity check when the measurement is implausible next to
+// it (see contextTokens).
+//
+// Providers report prompt usage differently, so each one normalises the figure
+// at parse time: Anthropic splits the prompt into input_tokens (the uncached
+// tail), cache writes and cache reads, while OpenAI-compatible,
+// Responses/Codex and Gemini already count the cached part in their prompt
+// count.
 package main
 
 import (
@@ -102,11 +109,70 @@ func estimateToolsTokens(tools []types.Tool) int {
 
 // currentContextTokens returns the locally estimated size of the context that
 // would be sent with the next request: the pruned history plus the tool schemas.
-// It never uses provider token counts.
+// It never uses provider token counts and is never the trigger on its own: see
+// contextTokens.
 func currentContextTokens(s *ChatSession) int {
 	if s == nil {
 		return 0
 	}
 	history := pruneScreenshotImages(s.ChatHistory, config.EffectiveMaxMedia())
 	return estimateHistoryTokens(history) + estimateToolsTokens(s.getToolsForAI())
+}
+
+// tokenEstimateTolerance bounds how far the provider's count and the local
+// estimate may diverge before the measurement is considered implausible. The
+// estimator is a rough approximation and tokenizers vary, so a factor of a few
+// is normal; an order-of-magnitude gap means the provider reported something
+// other than the whole context (a per-chunk count, the uncached tail of a
+// cached prompt, a gateway echoing the last message).
+const tokenEstimateTolerance = 4
+
+// providerContextTokens returns the provider's measurement of the context the
+// last request carried, extended with the locally estimated size of the
+// messages appended since that request (the response and its tool results). A
+// zero result means no usable measurement exists.
+func providerContextTokens(s *ChatSession) int {
+	if s == nil || s.lastProviderTokens <= 0 {
+		return 0
+	}
+	if s.lastProviderMessages < 0 || s.lastProviderMessages > len(s.ChatHistory) {
+		// The history was rewritten (compaction, resume, an edited prefix): the
+		// measurement no longer describes its prefix.
+		return 0
+	}
+	appended := pruneScreenshotImages(s.ChatHistory[s.lastProviderMessages:], config.EffectiveMaxMedia())
+	return s.lastProviderTokens + estimateHistoryTokens(appended)
+}
+
+// contextTokens returns the size of the context the next request would send, in
+// provider tokens: the provider's own measurement when it exists and is
+// plausible, the local estimate otherwise. This drives the compaction trigger.
+func contextTokens(s *ChatSession) int {
+	local := currentContextTokens(s)
+	provider := providerContextTokens(s)
+	if provider <= 0 || !plausibleContextTokens(provider, local) {
+		return local
+	}
+	return provider
+}
+
+// plausibleContextTokens reports whether a provider measurement is close enough
+// to the local estimate to be believed (see tokenEstimateTolerance).
+func plausibleContextTokens(provider, local int) bool {
+	if provider <= 0 || local <= 0 {
+		return false
+	}
+	return provider <= local*tokenEstimateTolerance && local <= provider*tokenEstimateTolerance
+}
+
+// rescaleContextTokens converts a local estimate into the unit a trigger used:
+// cur is the trigger value, local the local estimate taken at the same moment.
+// Compaction measures its result locally, but the threshold may have been
+// reached through the provider count, so both numbers must share a unit before
+// they are compared.
+func rescaleContextTokens(v, cur, local int) int {
+	if v <= 0 || cur <= 0 || local <= 0 || cur == local {
+		return v
+	}
+	return int(int64(v) * int64(cur) / int64(local))
 }

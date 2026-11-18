@@ -783,6 +783,9 @@ loop:
 					if usageObj, ok := respObj["usage"].(map[string]interface{}); ok {
 						if inputTokens, ok := usageObj["input_tokens"].(float64); ok && inputTokens > 0 {
 							result.PromptTokens = int(inputTokens)
+							// input_tokens is the whole prompt: cached_tokens is
+							// only a subset of it.
+							result.ContextTokens = int(inputTokens)
 						}
 						if outputTokens, ok := usageObj["output_tokens"].(float64); ok && outputTokens > 0 {
 							result.CompletionTokens = int(outputTokens)

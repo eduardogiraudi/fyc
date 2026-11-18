@@ -113,6 +113,9 @@ func TestCodexReasoningReplayEndToEnd(t *testing.T) {
 	if t1.PromptTokens != 10 || t1.CompletionTokens != 2 {
 		t.Fatalf("usage not parsed: prompt=%d completion=%d", t1.PromptTokens, t1.CompletionTokens)
 	}
+	if t1.ContextTokens != 10 {
+		t.Fatalf("input_tokens is the whole prompt: %+v", t1)
+	}
 
 	// Turn 1 must both ask for the encrypted state and send the effort.
 	if !includeHas(bodies[0], "reasoning.encrypted_content") {
