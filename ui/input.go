@@ -57,6 +57,11 @@ type inputModel struct {
 	histIdx int    // points into history; len(history) means "live" slot
 	liveBuf string // saved live buffer when navigating history
 
+	searchActive bool
+	searchQuery  []rune
+	searchIdx    int
+	searchCol    int
+
 	suggProvider SuggestionProvider
 	suggestions  []Suggestion
 	suggExtra    string
@@ -66,7 +71,8 @@ type inputModel struct {
 	submitted bool
 	value     string
 
-	width int
+	width  int
+	height int
 
 	submitDisabled bool
 
@@ -361,6 +367,8 @@ func (m inputModel) Submitted() bool { return m.submitted }
 
 func (m inputModel) Value() string { return strings.TrimRight(m.value, "\n") }
 
+func (m inputModel) HistorySearchActive() bool { return m.searchActive }
+
 func (m inputModel) HistorySnapshot() []string {
 	cp := make([]string, len(m.history))
 	copy(cp, m.history)
@@ -376,7 +384,9 @@ func (m inputModel) ResetForNext() inputModel {
 	if m.submitted && strings.TrimSpace(m.value) != "" {
 		m.history = append(m.history, strings.TrimRight(m.value, "\n"))
 	}
-	return newInputModel(m.history, m.suggProvider)
+	next := newInputModel(m.history, m.suggProvider)
+	next.width, next.height = m.width, m.height
+	return next
 }
 
 func (m inputModel) UpdateComponent(msg tea.Msg) (inputModel, tea.Cmd) {
@@ -388,6 +398,7 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 
 	case InputEnterIdleMsg:
 		if m.pendingEnter && msg.seq == m.enterSeq {
@@ -406,7 +417,16 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.breakLine()
 			}
 		}
+		if m.searchActive {
+			return m.updateHistorySearch(msg)
+		}
 		switch msg.Type {
+		case tea.KeyCtrlR:
+			m.searchActive = true
+			m.searchQuery = []rune(strings.Join(strings.Split(m.fullText(), "\n"), " "))
+			m.searchCol = len(m.searchQuery)
+			m.findHistoryMatch(len(m.history) - 1)
+			return m, nil
 
 		// Submit on Enter
 		case tea.KeyEnter:
@@ -745,6 +765,9 @@ func RenderSubmittedPrompt(input string) string {
 }
 
 func (m inputModel) View() string {
+	if m.searchActive {
+		return m.historySearchView()
+	}
 	var b strings.Builder
 
 	// Build prompt prefix: show git branch if available

@@ -202,9 +202,13 @@ func SplitModeSegment(line string) (prefix, mode, badge string, ok bool) {
 
 // TipsBlock returns the start-up hints as one rendered block: the caller draws
 // it itself (the alt-screen chat transcript seeds it into the view).
-func TipsBlock() string {
+func TipsBlock(altScreen bool) string {
+	modeHint := "ctrl+o or /auto"
+	if altScreen {
+		modeHint = "ctrl+o, /auto or a click on the mode badge"
+	}
 	return TipStyle.Render("Type /help for commands  •  exit to quit  •  enter to send  •  /sub on to enable subagents spawning") + "\n" +
-		TipStyle.Render("ctrl+o, /auto or a click on the mode badge to enable/disable auto mode")
+		TipStyle.Render(modeHint+" to enable/disable auto mode")
 }
 
 // StartupHeaderBlock returns the start-up banner rendered for the current

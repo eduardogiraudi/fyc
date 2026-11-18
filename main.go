@@ -172,7 +172,7 @@ func main() {
 		Role:    "system",
 		Content: sysPrompt,
 	})
-	emit(ui.TipsBlock())
+	emit(ui.TipsBlock(cfg.AltScreen))
 
 	// Initialize MCP servers in background with spinner
 	session.MCPManager = mcp.NewMCPManager(session.Version)

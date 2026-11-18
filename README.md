@@ -79,6 +79,7 @@ Keyboard shortcuts inside the chat:
 | --- | --- |
 | `Ctrl+C` | Stop the current generation (also on macOS, where it is `Ctrl`, not `Cmd`). |
 | `Ctrl+O` | Switch between auto and manual mode (same as `/auto`). |
+| `Ctrl+R` | Open a search bar for prompt history (case-insensitive), with a filtered result list. ↑/↓ selects a result, Enter recalls without sending, Esc or `Ctrl+C` cancels. |
 
 Handy commands inside the chat:
 

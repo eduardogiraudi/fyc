@@ -314,6 +314,7 @@ Inside the chat:
 | `/auto [on\|off]` | Toggle autonomous execution for the current session. |
 | `Ctrl+C` | Stop the current generation (on macOS it is `Ctrl`, not `Cmd`). |
 | `Ctrl+O` | Toggle autonomous execution without typing a command. |
+| `Ctrl+R` | Open a search bar for prompt history, case-insensitively, starting with the current draft. Results are listed newest first; ↑/↓ selects a result. ←/→ and Home/End move the search cursor, Backspace/Delete edits the query and `Ctrl+U` clears it. Enter/Tab recalls the whole prompt without sending it; Esc or `Ctrl+C` closes the search and preserves the draft and cursor, without quitting or interrupting a generation. Works in both inline and alt-screen modes. |
 | Mouse wheel, `PgUp` / `PgDn`, `Shift+↑` / `Shift+↓`, `Ctrl+Home`, `Ctrl+End` | Scroll the transcript in alt-screen mode (`alt_screen: true`); `Ctrl+End` returns to the live output. The wheel scrolls the transcript instead of the input history. No effect in the default inline REPL, where the terminal scrolls. |
 | Left-drag, release | Select transcript rows in alt-screen mode and copy them to the clipboard on release (`Shift`+drag selects with the terminal instead). |
 | `/airplane [on\|off]` | Toggle `web_search` and web-dependent commands. Equivalent to disabling/enabling `web_search` in tool settings. |

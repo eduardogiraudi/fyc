@@ -148,6 +148,11 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.input.HistorySearchActive() {
+			updated, cmd := m.input.UpdateComponent(msg)
+			m.input = updated
+			return m, cmd
+		}
 		if msg.Type == tea.KeyCtrlC {
 			if m.generating {
 				// Interrupt the turn: cancelling its context aborts the provider
