@@ -218,6 +218,11 @@ func StartupHeaderBlock(compact bool, info []string) string {
 	return formatStartupHeader(compact, info, width)
 }
 
+// StartupHeaderBlockAtWidth regenerates the layout from the original details.
+func StartupHeaderBlockAtWidth(compact bool, info []string, width int) string {
+	return ClampBlock(formatStartupHeader(compact, info, max(1, width)), max(1, width))
+}
+
 // TerminalWidth returns the terminal width in cells, falling back to 80 when the
 // size cannot be read (not a TTY).
 func TerminalWidth() int {

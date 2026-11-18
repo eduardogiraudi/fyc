@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	xansi "github.com/charmbracelet/x/ansi"
+	reflowansi "github.com/muesli/reflow/ansi"
 )
 
 // tabStopWidth is the tab stop every terminal we target uses when nothing
@@ -158,4 +159,29 @@ func ClampBlock(s string, width int) string {
 		lines[i] = clampLine(l, width)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// WrapBlock fits rendered text into explicit rows without discarding content.
+func WrapBlock(s string, width int) string {
+	if width <= 0 {
+		width = 1
+	}
+	s = strings.ReplaceAll(s, "\r", "")
+	s = expandTabs(s, tabStopWidth)
+	wrapped := xansi.Hardwrap(s, width, true)
+	if !strings.Contains(wrapped, "\x1b") {
+		return ClampBlock(wrapped, width)
+	}
+	var b strings.Builder
+	writer := reflowansi.Writer{Forward: &b}
+	for i, row := range strings.Split(wrapped, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+			writer.RestoreAnsi()
+		}
+		_, _ = writer.Write([]byte(row))
+		// The frame draws rows independently: each must restore and close SGR.
+		writer.ResetAnsi()
+	}
+	return ClampBlock(b.String(), width)
 }

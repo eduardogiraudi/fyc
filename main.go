@@ -293,7 +293,9 @@ func main() {
 	chat := newChatModel(session, chatSink, persistedHistory, buildSuggestionProvider(session))
 	opts := []tea.ProgramOption{tea.WithoutSignals()}
 	if altScreen {
-		chat.enableAltScreen(altSeed)
+		chat.enableAltScreen(altSeed, func(width int) string {
+			return ui.StartupHeaderBlockAtWidth(cfg.CompactBanner, info, width)
+		})
 		// Mouse reporting is what turns a wheel turn into a MouseMsg: without
 		// it the terminal sends arrow keys and the wheel walks the input
 		// history. All-motion (not just button-event) reporting is what the

@@ -19,6 +19,11 @@ const transcriptMaxLines = 20000
 // proportional to a terminal row.
 const mouseScrollRows = 3
 
+type transcriptBlock struct {
+	rows   []string
+	render func(int) string
+}
+
 // transcriptState holds the completed output of the alt-screen chat: rendered
 // blocks are appended here instead of being printed into the terminal
 // scrollback (see chatModel.printCmd), and view returns the window of rows the
@@ -28,7 +33,9 @@ const mouseScrollRows = 3
 // Bubble Tea message: the accumulated rows and the scroll position are shared,
 // the frame is not.
 type transcriptState struct {
-	lines []string
+	lines  []string
+	blocks []transcriptBlock
+	width  int
 	// offset is how many rows the window is scrolled up from the bottom; zero
 	// follows the live output.
 	offset int
@@ -50,31 +57,92 @@ type cellPos struct {
 	col int
 }
 
-// Append adds an already-rendered, width-clamped block (one row per line).
+// Append adds an already-rendered block whose rows do not need reflow.
 func (t *transcriptState) Append(block string) {
+	t.appendBlock(block, nil)
+}
+
+// AppendRendered retains the source so resizing never reflows truncated rows.
+func (t *transcriptState) AppendRendered(render func(int) string, width int) {
+	t.width = width
+	t.appendBlock(render(width), render)
+}
+
+func (t *transcriptState) appendBlock(block string, render func(int) string) {
 	block = strings.TrimRight(block, "\n")
 	if strings.TrimSpace(block) == "" {
 		return
 	}
 	added := strings.Split(block, "\n")
-	// A reader scrolled up keeps the rows they are on: the new lines land below
-	// the window instead of pushing it, which is what the distance from the
-	// bottom has to grow by.
 	if t.offset > 0 {
 		t.offset += len(added)
 	}
+	t.blocks = append(t.blocks, transcriptBlock{rows: added, render: render})
 	t.lines = append(t.lines, added...)
-	if drop := len(t.lines) - transcriptMaxLines; drop > 0 {
-		t.lines = append([]string(nil), t.lines[drop:]...)
-		// The selection is expressed in indexes, which the drop just moved.
-		t.selAnchor.row -= drop
-		t.selCursor.row -= drop
-		t.viewStart -= drop
-		if t.selAnchor.row < 0 || t.selCursor.row < 0 {
-			t.selActive = false
-		}
-	}
+	t.trim()
 	t.clamp()
+}
+
+func (t *transcriptState) trim() {
+	drop := len(t.lines) - transcriptMaxLines
+	if drop <= 0 {
+		return
+	}
+	t.lines = append([]string(nil), t.lines[drop:]...)
+	t.selAnchor.row -= drop
+	t.selCursor.row -= drop
+	t.viewStart -= drop
+	if t.selAnchor.row < 0 || t.selCursor.row < 0 {
+		t.selActive = false
+	}
+	i := 0
+	for i < len(t.blocks) && drop >= len(t.blocks[i].rows) {
+		drop -= len(t.blocks[i].rows)
+		i++
+	}
+	t.blocks = append([]transcriptBlock(nil), t.blocks[i:]...)
+	if drop > 0 {
+		// A partially evicted block becomes static: never resurrect its head.
+		t.blocks[0] = transcriptBlock{rows: append([]string(nil), t.blocks[0].rows[drop:]...)}
+	}
+}
+
+func (t *transcriptState) Resize(width int) {
+	if width <= 0 || width == t.width {
+		return
+	}
+	t.width = width
+	start := max(0, len(t.lines)-t.height-t.offset)
+	oldRow, newStart := 0, 0
+	lines := make([]string, 0, len(t.lines))
+	blocks := append([]transcriptBlock(nil), t.blocks...)
+	for i, block := range blocks {
+		rows := block.rows
+		if block.render != nil {
+			rows = strings.Split(strings.TrimRight(block.render(width), "\n"), "\n")
+		}
+		if start >= oldRow && start < oldRow+len(block.rows) {
+			newStart = len(lines) + min(start-oldRow, len(rows)-1)
+		}
+		oldRow += len(block.rows)
+		blocks[i].rows = rows
+		lines = append(lines, rows...)
+	}
+	t.blocks, t.lines = blocks, lines
+	if t.offset > 0 {
+		t.offset = max(0, len(lines)-t.height-newStart)
+	}
+	t.SelectionClear()
+	t.viewStart = newStart
+	t.trim()
+	t.clamp()
+}
+
+func (t *transcriptState) Clone() *transcriptState {
+	copy := *t
+	copy.lines = append([]string(nil), t.lines...)
+	copy.blocks = append([]transcriptBlock(nil), t.blocks...)
+	return &copy
 }
 
 // ScrollUp moves the window n rows towards the start of the transcript.

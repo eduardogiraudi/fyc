@@ -29,6 +29,15 @@ func SetPreProgramBlockSink(fn func(string)) {
 // attached: into the alt-screen seed when one is registered, into stdout
 // otherwise.
 func PrintRenderedBlock(text string) {
+	printPreProgramBlock(text, false)
+}
+
+// PrintReplayBlock keeps the full source in the seed but clamps plain stdout.
+func PrintReplayBlock(text string) {
+	printPreProgramBlock(text, true)
+}
+
+func printPreProgramBlock(text string, clamp bool) {
 	if text == "" {
 		return
 	}
@@ -38,6 +47,9 @@ func PrintRenderedBlock(text string) {
 	if fn != nil {
 		fn(text)
 		return
+	}
+	if clamp {
+		text = ClampBlock(text, TerminalWidth())
 	}
 	fmt.Println(text)
 }

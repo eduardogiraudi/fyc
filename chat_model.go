@@ -93,11 +93,15 @@ func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []s
 // output goes into transcript instead of the terminal scrollback. seed holds the
 // blocks printed before the program started (banner, tips, start-up notices),
 // which the alternate screen would otherwise hide.
-func (m *chatModel) enableAltScreen(seed []string) {
+func (m *chatModel) enableAltScreen(seed []string, header ...func(int) string) {
 	m.transcript = &transcriptState{}
 	m.hit = &frameHit{}
-	for _, block := range seed {
-		m.transcript.Append(block)
+	for i, block := range seed {
+		if i == 0 && len(header) > 0 {
+			m.transcript.AppendRendered(header[0], m.width)
+		} else {
+			m.transcript.AppendRendered(func(width int) string { return ui.WrapBlock(block, width) }, m.width)
+		}
 	}
 }
 
@@ -123,6 +127,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.transcript != nil {
+			m.transcript.Resize(msg.Width)
+			if m.streamAttempt != nil {
+				m.streamAttempt.Resize(msg.Width)
+			}
+		}
 		m.reasoning.Resize(msg.Width, reasoningHeight(msg.Height))
 		// The markdown singleton is created at whatever width was current when
 		// it was first used: without this sync a resize keeps every rendered
@@ -263,17 +273,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushTextCmd()
 			m.finishReasoningCmd()
 			m.clearTransient()
-			snapshot := *m.transcript
-			snapshot.lines = append([]string(nil), snapshot.lines...)
-			m.streamAttempt = &snapshot
+			m.streamAttempt = m.transcript.Clone()
 		}
 		msg.Reply <- supported
 
 	case ui.StreamAttemptRollbackMsg:
 		restored := m.transcript != nil && m.streamAttempt != nil
 		if restored {
-			*m.transcript = *m.streamAttempt
-			m.transcript.lines = append([]string(nil), m.streamAttempt.lines...)
+			*m.transcript = *m.streamAttempt.Clone()
 			m.transcript.SelectionClear()
 			m.textBuf = ""
 			m.reasoning = ui.NewReasoningView(m.width, reasoningHeight(m.height))
@@ -774,14 +781,11 @@ func (m *chatModel) finishReasoningCmd() tea.Cmd {
 }
 
 func (m *chatModel) printCmd(s string) tea.Cmd {
-	block := ui.ClampBlock(s, m.width)
-	// Alt-screen mode owns its own scrollback (see transcriptState): there is no
-	// terminal output to print into, and the view repaints from the transcript.
 	if m.transcript != nil {
-		m.transcript.Append(block)
+		m.transcript.AppendRendered(func(width int) string { return ui.WrapBlock(s, width) }, m.width)
 		return nil
 	}
-	return tea.Println(block)
+	return tea.Println(ui.ClampBlock(s, m.width))
 }
 
 // handleScrollKey consumes the transcript navigation keys and reports whether
