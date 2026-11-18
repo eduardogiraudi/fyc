@@ -148,6 +148,18 @@ func (s *TerminalOutputSink) WriteToolOutput(label, res string) {
 	PrintToolOutput(label, res)
 }
 
+// PrintBlock prints an already-rendered block verbatim in the scrollback (see
+// StreamPrintMsg). It implements the block sink used by the session replay.
+func (s *TerminalOutputSink) PrintBlock(text string) {
+	if text == "" {
+		return
+	}
+	if s.send(StreamPrintMsg{Text: text}) {
+		return
+	}
+	fmt.Println(text)
+}
+
 func (s *TerminalOutputSink) Reset() {
 	if s.send(StreamResetMsg{}) {
 		return

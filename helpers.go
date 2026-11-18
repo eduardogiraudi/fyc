@@ -255,6 +255,7 @@ func resumeSession(s *ChatSession, workspaceDir, id string) error {
 	s.SessionID = sf.ID
 	s.SessionCreatedAt = sf.CreatedAt
 	s.SessionTitle = sessionTitle(msgs)
+	replaySessionHistory(s)
 	return nil
 }
 

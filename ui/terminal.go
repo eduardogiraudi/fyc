@@ -184,6 +184,15 @@ func RenderStartupHeader(compact bool, info []string) {
 	fmt.Println(formatStartupHeader(compact, info, width))
 }
 
+// TerminalWidth returns the terminal width in cells, falling back to 80 when the
+// size cannot be read (not a TTY).
+func TerminalWidth() int {
+	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
+		return width
+	}
+	return 80
+}
+
 func RenderSeparator() {
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {

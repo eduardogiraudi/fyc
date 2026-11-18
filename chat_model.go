@@ -199,7 +199,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.finishReasoningCmd())
 		m.clearTransient()
 		m.subagentPanel = nil
-		cmds = append(cmds, m.printCmd(ui.FormatToolOutput(msg.Label, msg.Result, m.width, 2)))
+		cmds = append(cmds, m.printCmd(ui.FormatToolOutput(msg.Label, msg.Result, m.width, ui.ToolOutputRows)))
 
 	case ui.StreamInterruptMsg:
 		cmds = append(cmds, m.flushTextCmd())
@@ -239,6 +239,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+	case ui.StreamPrintMsg:
+		// A block that is already rendered (session replay): nothing may be
+		// waiting in the markdown buffer, and the text must not be re-rendered.
+		cmds = append(cmds, m.flushTextCmd())
+		cmds = append(cmds, m.finishReasoningCmd())
+		if strings.TrimSpace(msg.Text) != "" {
+			cmds = append(cmds, m.printCmd(msg.Text))
+		}
 	case ui.StreamResumeMsg:
 		// A nested program (permission prompt, questionary, ...) released the
 		// terminal and cleared the transient lines: if a tool is still running,

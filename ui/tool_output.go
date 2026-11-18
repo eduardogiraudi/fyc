@@ -11,6 +11,11 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+// ToolOutputRows is how many result rows a tool call shows in the chat; the
+// rest collapses into a "… N more lines hidden" marker. Session replay reuses
+// it so a resumed conversation looks exactly like the live one.
+const ToolOutputRows = 2
+
 // toolOutputLines builds the display lines for a tool call: the (wrapped)
 // label, then the result, hard-capped to maxRows. Both renderers — the Tea
 // chat and the plain terminal fallback — go through it, so the display can

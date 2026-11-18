@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"fuckyourcli/types"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // recordSink is a minimal OutputSink that captures text and answers the
@@ -32,6 +33,7 @@ func (r *recordSink) WriteInterrupt()                {}
 func (r *recordSink) WriteStats(string, string)      {}
 func (r *recordSink) Reset()                         {}
 func (r *recordSink) Finalize()                      {}
+func (r *recordSink) PrintBlock(text string)         { r.buf.WriteString(text + "\n") }
 func (r *recordSink) SelectOption(string, []string) int {
 	if len(r.selectQueue) > 0 {
 		v := r.selectQueue[0]
@@ -206,5 +208,59 @@ func TestSessionsMenuCancel(t *testing.T) {
 	}
 	if metas, _ := listSessions(ws); len(metas) != 1 {
 		t.Fatalf("unexpected sessions after cancel: %+v", metas)
+	}
+}
+
+// TestSwitchSessionReplaysHistory: switching to a stored session redraws its
+// conversation in the scrollback, tool calls included, with each result
+// truncated exactly like the live TUI truncates it.
+func TestSwitchSessionReplaysHistory(t *testing.T) {
+	testWorkspace(t)
+	sink := &recordSink{}
+	s := &ChatSession{RestrictedRoot: "/w", Sink: sink}
+
+	s.ChatHistory = []types.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{
+			ID:       "call_ok",
+			Function: types.ToolCallFunction{Name: "read", Arguments: map[string]interface{}{"path": "main.go"}},
+		}}},
+		{Role: "tool", Name: "read", ToolCallID: "call_ok", Content: "line one\nline two\nline three\nline four\nline five"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{
+			ID:       "call_ko",
+			Function: types.ToolCallFunction{Name: "read", Arguments: map[string]interface{}{"path": "nope.go"}},
+		}}},
+		{Role: "tool", Name: "read", ToolCallID: "call_ko", Content: "error: no such file"},
+		{Role: "assistant", Content: "final answer"},
+	}
+	if err := saveChatSession(s); err != nil {
+		t.Fatal(err)
+	}
+	loadedID := s.SessionID
+
+	// Fresh chat, then switch back through /sessions (pre-menu 0 → picker 0).
+	s.SessionID, s.SessionTitle, s.SessionCreatedAt = "", "", time.Time{}
+	s.ChatHistory = []types.Message{{Role: "system", Content: "sys"}}
+	sink.reset()
+	sink.selectQueue = []int{0, 0}
+	handleSessionsCommand(s, "/sessions")
+
+	out := xansi.Strip(sink.text())
+	if s.SessionID != loadedID {
+		t.Fatalf("switch failed: session = %q, want %q", s.SessionID, loadedID)
+	}
+	for _, want := range []string{
+		"first question",              // user prompt
+		"final answer",                // assistant reply
+		"read file main.go",           // tool label
+		"line two",                    // result, as the live TUI shows it
+		"… 3 more lines hidden",       // rows beyond ui.ToolOutputRows collapse
+		"failed to read file nope.go", // failure keeps its own label
+		"error: no such file",         // short result is shown in full
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("replay missing %q in:\n%s", want, out)
+		}
 	}
 }

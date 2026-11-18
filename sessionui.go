@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"fuckyourcli/tools"
 	"fuckyourcli/types"
 	"fuckyourcli/ui"
 )
@@ -63,6 +64,7 @@ func switchChatSession(s *ChatSession, id string) error {
 	s.SessionID = sf.ID
 	s.SessionCreatedAt = sf.CreatedAt
 	s.SessionTitle = sessionTitle(msgs)
+	replaySessionHistory(s)
 	return nil
 }
 
@@ -303,4 +305,148 @@ func deleteSessionsInteractive(s *ChatSession, ops sessionUIOps) {
 	}
 	s.Sink.WriteText(ui.OkStyle.Render(fmt.Sprintf("Deleted %d session(s)", deleted)))
 	s.Sink.WriteNewline()
+}
+
+// blockPrinter is implemented by sinks that can print an already-rendered block
+// verbatim into the scrollback (the TUI one does). History replay is not a
+// markdown stream: pushing it through the stream renderer would re-wrap and
+// re-highlight text that was already rendered, and split it at block
+// boundaries that no longer exist.
+type blockPrinter interface{ PrintBlock(text string) }
+
+// writeSessionBlock prints one replayed history block. Without a block-capable
+// sink (plain stdout before the TUI starts, the AG-UI sink) the block is
+// printed directly, clamped so a line can never soft-wrap the terminal.
+func writeSessionBlock(s *ChatSession, block string) {
+	if strings.TrimSpace(block) == "" {
+		return
+	}
+	if bp, ok := s.Sink.(blockPrinter); ok {
+		bp.PrintBlock(block)
+		return
+	}
+	fmt.Println(ui.ClampBlock(block, ui.TerminalWidth()))
+}
+
+// replaySessionHistory redraws a resumed conversation: without it a loaded
+// session opened on an empty terminal where the model had the whole history but
+// the user could see nothing. Every block is reproduced the way the live turn
+// printed it — tool calls with their result, truncated to the same rows and
+// with the same "… N more lines hidden" marker — so a resumed chat reads like
+// the one that was live.
+func replaySessionHistory(s *ChatSession) {
+	if s == nil || len(s.ChatHistory) == 0 {
+		return
+	}
+
+	replayed := 0
+	for _, m := range s.ChatHistory {
+		switch m.Role {
+		case "user":
+			if replayablePrompt(m.Content) != "" {
+				replayed++
+			}
+		case "assistant":
+			replayed++
+		}
+	}
+	if replayed == 0 {
+		return
+	}
+
+	// The width drives both the wrapping and the truncation of a tool result,
+	// so it must be the real terminal width (the TUI clamps to it as well).
+	width := ui.TerminalWidth()
+	writeSessionBlock(s, ui.InfoStyle.Render(fmt.Sprintf("↺ resumed chat · %d previous messages", replayed)))
+
+	// pending holds the tool calls announced by the last assistant message that
+	// have not met their result yet: a call still pending when another message
+	// starts belongs to an interrupted turn and is replayed as a bare label,
+	// like the spinner the live turn left behind.
+	var pending []types.ToolCall
+	flushPending := func() {
+		for _, tc := range pending {
+			lbl := tools.DescribeTool(tc.Function.Name, tc.Function.Arguments)
+			writeSessionBlock(s, fmt.Sprintf("%s %s", ui.ToolStyle.Render("☉"), ui.InfoStyle.Render(lbl.Done)))
+		}
+		pending = pending[:0]
+	}
+
+	for _, m := range s.ChatHistory {
+		switch m.Role {
+		case "user":
+			flushPending()
+			if strings.HasPrefix(m.Content, compactionSummaryPrefix) {
+				writeSessionBlock(s, ui.TipStyle.Render("▣ compacted context summary"))
+				continue
+			}
+			if prompt := replayablePrompt(m.Content); prompt != "" {
+				writeSessionBlock(s, ui.RenderSubmittedPrompt(prompt))
+			}
+		case "assistant":
+			flushPending()
+			if strings.TrimSpace(m.Content) != "" {
+				writeSessionBlock(s, ui.GetStreamRenderer().RenderMarkdown(m.Content))
+			}
+			pending = append(pending, m.ToolCalls...)
+		case "tool":
+			call, _ := takePendingCall(&pending, m)
+			writeSessionBlock(s, replayToolResult(m, call, width))
+		}
+	}
+	flushPending()
+}
+
+// replayToolResult renders a stored tool result exactly like the live TUI: the
+// done/failed label followed by the result, truncated to ui.ToolOutputRows.
+func replayToolResult(message types.Message, call types.ToolCall, width int) string {
+	name := call.Function.Name
+	if name == "" {
+		name = message.Name
+	}
+	label := tools.DescribeTool(name, call.Function.Arguments)
+	if types.ToolResultFailed(message.Content) {
+		return ui.FormatToolOutput(label.Failed, message.Content, width, ui.ToolOutputRows)
+	}
+	return ui.FormatToolOutput(label.Done, message.Content, width, ui.ToolOutputRows)
+}
+
+// takePendingCall pops the call a tool message answers: by call id when the
+// transport assigned one, otherwise the first announced call with the same tool
+// name (sessions written before call ids were persisted have none).
+func takePendingCall(pending *[]types.ToolCall, m types.Message) (types.ToolCall, bool) {
+	queue := *pending
+	idx := -1
+	if m.ToolCallID != "" {
+		for i, tc := range queue {
+			if tc.ID == m.ToolCallID {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		for i, tc := range queue {
+			if tc.Function.Name == m.Name {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		return types.ToolCall{}, false
+	}
+	call := queue[idx]
+	*pending = append(queue[:idx:idx], queue[idx+1:]...)
+	return call, true
+}
+
+// replayablePrompt returns the prompt to redraw, or "" for the entries that are
+// bookkeeping rather than something the user typed (mode instruction
+// injections, empty turns).
+func replayablePrompt(content string) string {
+	if strings.HasPrefix(content, "[INSTRUCTIONS]: ") {
+		return ""
+	}
+	return strings.TrimSpace(content)
 }

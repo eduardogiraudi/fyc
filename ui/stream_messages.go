@@ -14,6 +14,12 @@ type StreamToolOutputMsg struct{ Label, Result string }
 type StreamInterruptMsg struct{}
 type StreamNewlineMsg struct{}
 
+// StreamPrintMsg asks the chat model to print an already-rendered block
+// verbatim in the scrollback. Session replay uses it: history text must land as
+// completed output, never through the markdown stream renderer (which would
+// re-wrap and re-highlight what was already rendered).
+type StreamPrintMsg struct{ Text string }
+
 // StreamStatsMsg carries provider info and token stats to be rendered above the input.
 type StreamStatsMsg struct {
 	ProviderInfo string
