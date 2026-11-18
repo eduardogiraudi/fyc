@@ -348,7 +348,7 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 				modelOptions = append(modelOptions, m)
 			}
 		}
-		idx := s.Sink.SelectOption("Select model", modelOptions)
+		idx := ui.SelectModelOption(s.Sink, "Select model", modelOptions)
 		if idx < 0 {
 			s.Sink.WriteText(ui.InfoStyle.Render("Model selection cancelled"))
 			s.Sink.WriteNewline()
@@ -421,36 +421,42 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			s.Sink.WriteNewline()
 			return true, ""
 		}
-		oldProvider := config.GetProvider()
-		oldModel := config.Get().Model
-		if providerType == config.ProviderOpenAICompatible {
-			config.SwitchToOpenAIProvider(providerName, model, false)
-		} else if providerType == config.ProviderOpenAIResponsesCompatible {
+		if providerType == config.ProviderOpenAIResponsesCompatible {
 			providerName = strings.TrimSuffix(providerName, " [Responses]")
-			config.SwitchToOpenAIResponsesProvider(providerName, model, false)
 		} else if providerType == config.ProviderAnthropic {
 			providerName = strings.TrimSuffix(providerName, " [Anthropic]")
-			config.SwitchToAnthropicProvider(providerName, model, false)
-		} else {
-			config.SwitchProviderAndModel(providerType, model, false)
 		}
-		s.Sink.WriteText(fmt.Sprintf(ui.InfoStyle.Render("Fetching available models for %s..."), selectedProviderStr))
-		s.Sink.WriteNewline()
-		models, err := config.GetAvailableModelsForCurrentProvider()
-		if err != nil || len(models) == 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("Could not fetch models for this provider. Using default."))
-			s.Sink.WriteNewline()
-			models = []string{model}
+		finalModel := model
+		chooseModel := model == ""
+		if !chooseModel {
+			choice := s.Sink.SelectOption(fmt.Sprintf("Use current model for %s?", providerName), []string{
+				"Yes, use " + model,
+				"No, choose another model",
+			})
+			if choice < 0 {
+				sinkLine(s.Sink, ui.InfoStyle.Render("Provider selection cancelled"))
+				return true, ""
+			}
+			chooseModel = choice == 1
 		}
-		modelIdx := s.Sink.SelectOption(fmt.Sprintf("Select model for %s", selectedProviderStr), models)
-		if modelIdx < 0 {
-			config.SwitchProviderAndModel(oldProvider, oldModel, false)
-			s.Sink.WriteText(ui.InfoStyle.Render("Model selection cancelled"))
-			s.Sink.WriteNewline()
-			return true, ""
+		if chooseModel {
+			sinkLine(s.Sink, ui.InfoStyle.Render(fmt.Sprintf("Fetching available models for %s...", selectedProviderStr)))
+			models, fetchErr := config.GetAvailableModelsForProvider(providerType, providerName, model)
+			if fetchErr != nil || len(models) == 0 {
+				if model == "" {
+					sinkLine(s.Sink, ui.InfoStyle.Render("No models available for this provider"))
+					return true, ""
+				}
+				sinkLine(s.Sink, ui.InfoStyle.Render("Could not fetch models for this provider. Using current model."))
+				models = []string{model}
+			}
+			modelIdx := ui.SelectModelOption(s.Sink, fmt.Sprintf("Select model for %s", selectedProviderStr), models)
+			if modelIdx < 0 {
+				sinkLine(s.Sink, ui.InfoStyle.Render("Model selection cancelled"))
+				return true, ""
+			}
+			finalModel = models[modelIdx]
 		}
-		finalModel := models[modelIdx]
-		config.SwitchProviderAndModel(oldProvider, oldModel, false)
 		saveToFile := s.Sink.SelectOption("Save this provider and model selection to config file?", []string{
 			"No, use only for this session",
 			"Yes, save permanently",

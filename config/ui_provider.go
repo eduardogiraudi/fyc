@@ -252,7 +252,7 @@ func maybeChangeModel(ref providerRef) bool {
 		}
 	}
 
-	mIdx := ui.SelectOption("Select model", models)
+	mIdx := ui.SelectSearchableOption("Select model", models)
 	if mIdx < 0 {
 		return false // dismissed the model list: abort
 	}

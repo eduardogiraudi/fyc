@@ -358,7 +358,20 @@ func ParseProviderSelection(selection string) (ProviderType, string, error) {
 
 // GetAvailableModelsForCurrentProvider returns available models for the current provider
 func GetAvailableModelsForCurrentProvider() ([]string, error) {
+	return availableModels(Get())
+}
+
+// GetAvailableModelsForProvider fetches without changing the active configuration.
+func GetAvailableModelsForProvider(provider ProviderType, name, model string) ([]string, error) {
 	cfg := Get()
+	cfg.Provider, cfg.ActiveProviderName, cfg.Model = provider, name, model
+	if provider == ProviderGemini {
+		cfg.GeminiModel = model
+	}
+	return availableModels(cfg)
+}
+
+func availableModels(cfg Config) ([]string, error) {
 
 	if cfg.Provider == ProviderGemini {
 		if cfg.GeminiAPIKey == "" {

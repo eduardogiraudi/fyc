@@ -260,6 +260,9 @@ func (s *TerminalOutputSink) PauseForExternalPrompt() {
 func (s *TerminalOutputSink) SelectOption(title string, options []string) int {
 	return SelectOption(title, options)
 }
+func (s *TerminalOutputSink) SelectSearchableOption(title string, options []string) int {
+	return SelectSearchableOption(title, options)
+}
 func (s *TerminalOutputSink) StartSubagent(id, label string)          {}
 func (s *TerminalOutputSink) UpdateSubagent(id, status string)        {}
 func (s *TerminalOutputSink) FinishSubagent(id, label, result string) {}

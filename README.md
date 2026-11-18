@@ -87,7 +87,7 @@ Handy commands inside the chat:
 | --- | --- |
 | `/help` | Show available commands. |
 | `/auto [on\|off]` | Turn auto mode on or off: no confirmation prompts, so use it only in trusted directories. |
-| `/model`, `/provider` | Switch model or provider. |
+| `/model`, `/provider` | Switch model or provider; `/provider` offers to reuse its configured model. Model lists have a fixed search bar in both REPL and alternate-screen TUI (type to filter, arrows to navigate, Enter to select, Esc to cancel). |
 | `/tools` | Enable or disable built-in tools. |
 | `/sessions` | Manage saved sessions (switch, new, rename, delete) via an interactive menu. |
 | `/plan`, `/debug`, `/deep` | One-shot planning, debugging and deep-research modes. |

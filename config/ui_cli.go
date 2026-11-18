@@ -240,7 +240,7 @@ func selectCompactionModel() {
 			models = []string{manual}
 		}
 	}
-	mIdx := ui.SelectOption("Select the model that writes the compaction summary", models)
+	mIdx := ui.SelectSearchableOption("Select the model that writes the compaction summary", models)
 	if mIdx < 0 {
 		return
 	}

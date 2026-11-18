@@ -178,6 +178,9 @@ func (m mouseButtons) View() string {
 		confirm = model.InputMode
 		if !model.InputMode {
 			row := titleRows(model.Title, model.StyledTitle)
+			if model.searchable {
+				row++
+			}
 			pinned := clampInt(model.PinnedTop, 0, len(model.Options))
 			for i := 0; i < pinned; i++ {
 				row = addRows(row, i, model.optionLine(i), !separatorOption(model.Options[i]))

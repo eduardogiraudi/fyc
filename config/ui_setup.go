@@ -263,10 +263,10 @@ func inputWithDefault(prompt, defaultVal string) string {
 }
 
 // selectModelOrCancel shows a model selector and returns the chosen model. ok
-// is false when the user dismissed the prompt (q / Ctrl+C / Esc) without
+// is false when the user dismissed the prompt (Ctrl+C / Esc) without
 // choosing, so the caller can abort instead of indexing past the list.
 func selectModelOrCancel(title string, models []string) (string, bool) {
-	idx := ui.SelectOption(title, models)
+	idx := ui.SelectSearchableOption(title, models)
 	if idx < 0 {
 		return "", false
 	}

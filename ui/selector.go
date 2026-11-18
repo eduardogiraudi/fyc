@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 )
@@ -35,11 +36,84 @@ type SelectorModel struct {
 	AutoAcceptOnCtrlO bool
 	MaxVisible        int // Visible lines before scrolling (0 = default 15)
 	PinnedTop         int // First N options always visible, outside the scroll
+	searchable        bool
+	search            textinput.Model
+	allOptions        []string
+	optionIndices     []int
 }
 
 func (m SelectorModel) Init() tea.Cmd { return nil }
 
+func newSearchableSelector(title string, options []string) SelectorModel {
+	search := textinput.New()
+	search.Prompt = "Search: "
+	search.Placeholder = "Type to filter models"
+	search.Focus()
+	m := SelectorModel{Title: title, SuggestIdx: -1, Choice: SelectorCanceled,
+		searchable: true, search: search, allOptions: append([]string(nil), options...)}
+	m.filterOptions()
+	return m
+}
+
+func (m *SelectorModel) filterOptions() {
+	query := strings.ToLower(strings.TrimSpace(m.search.Value()))
+	m.Options = nil
+	m.optionIndices = nil
+	for i, option := range m.allOptions {
+		if strings.Contains(strings.ToLower(option), query) {
+			m.Options = append(m.Options, option)
+			m.optionIndices = append(m.optionIndices, i)
+		}
+	}
+	m.Cursor, m.Offset = 0, 0
+}
+
+func (m SelectorModel) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc", "ctrl+c":
+			m.Choice, m.quitting = SelectorCanceled, true
+			return m, tea.Quit
+		case "up":
+			if m.Cursor > 0 {
+				m.Cursor--
+			}
+			m.adjustOffset()
+			return m, nil
+		case "down":
+			if m.Cursor < len(m.Options)-1 {
+				m.Cursor++
+			}
+			m.adjustOffset()
+			return m, nil
+		case "enter":
+			if len(m.Options) == 0 {
+				return m, nil
+			}
+			m.Choice, m.quitting = m.optionIndices[m.Cursor], true
+			return m, tea.Quit
+		}
+	}
+	previous := m.search.Value()
+	var cmd tea.Cmd
+	m.search, cmd = m.search.Update(msg)
+	if previous != m.search.Value() {
+		m.filterOptions()
+	}
+	return m, cmd
+}
+
 func (m SelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searchable {
+		if size, ok := msg.(tea.WindowSizeMsg); ok {
+			m.width = size.Width
+			m.search.Width = max(1, size.Width-16)
+			m.MaxVisible = max(1, min(15, size.Height-10))
+			m.adjustOffset()
+			return m, nil
+		}
+		return m.updateSearch(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -274,6 +348,9 @@ func (m SelectorModel) View() string {
 		b.WriteString(SelectorHeader.Render(m.Title) + "\n")
 	}
 
+	if m.searchable {
+		b.WriteString("  " + m.search.View() + "\n")
+	}
 	// ── Visible range ───────────────────────────────────────────────────────
 	// The first PinnedTop options stay above the scroll window and are always
 	// visible; Offset is relative to the scrollable region that follows them.
@@ -332,7 +409,14 @@ func (m SelectorModel) View() string {
 	if len(contentLines) > 0 {
 		allContent += strings.Join(contentLines, "\n")
 	}
-	allContent += "\n" + HintStyle.Render("  ▲/▼ navigate  ·  ↵ confirm  ·  q/esc quit")
+	if m.searchable {
+		if len(m.Options) == 0 {
+			allContent += DimStyle.Render("  No matching models")
+		}
+		allContent += "\n" + HintStyle.Render("  type to filter  ·  ▲/▼ navigate  ·  ↵ confirm  ·  esc quit")
+	} else {
+		allContent += "\n" + HintStyle.Render("  ▲/▼ navigate  ·  ↵ confirm  ·  q/esc quit")
+	}
 
 	boxed := SelectorBorder.Render(allContent)
 
@@ -423,6 +507,23 @@ func SelectOption(title string, options []string) int {
 		return &SelectorModel{Title: title, Options: options, SuggestIdx: -1}
 	})
 	return idx
+}
+
+// SelectSearchableOption returns an index into the original, unfiltered options.
+func SelectSearchableOption(title string, options []string) int {
+	idx, _ := selectOrNested(func() *SelectorModel {
+		m := newSearchableSelector(title, options)
+		return &m
+	})
+	return idx
+}
+
+// SelectModelOption preserves non-terminal sinks while enabling terminal search.
+func SelectModelOption(sink interface{ SelectOption(string, []string) int }, title string, options []string) int {
+	if searchable, ok := sink.(interface{ SelectSearchableOption(string, []string) int }); ok {
+		return searchable.SelectSearchableOption(title, options)
+	}
+	return sink.SelectOption(title, options)
 }
 
 // SelectOptionWindow is SelectOption with an explicit window height: only

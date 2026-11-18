@@ -171,9 +171,9 @@ func updateProviderModel(ed providerEditable) {
 		return
 	}
 
-	mIdx := ui.SelectOption("Select new model", models)
+	mIdx := ui.SelectSearchableOption("Select new model", models)
 	if mIdx < 0 {
-		return // dismissed (q / Ctrl+C / Esc)
+		return // dismissed (Ctrl+C / Esc)
 	}
 	chosen := models[mIdx]
 	oldModel := ed.getModel()
