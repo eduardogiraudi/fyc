@@ -759,7 +759,7 @@ curl -N http://127.0.0.1:8787/ \
 
 - Built-in file tools validate paths against the startup working directory.
 - Traversal outside the restricted root is rejected.
-- Ignore files (`.gitignore`, `.dockerignore`, `.fycignore`, `.ignore`) are respected for built-in reads/searches/edits; `.git` is always blocked.
+- Built-in reads/searches/edits respect scoped `.fycignore` and `.gitignore` rules. A `.fycignore` file, even empty, replaces all applicable `.gitignore` rules within its directory and descendants, whether or not a root `.fycignore` exists; outside that subtree, git rules still apply. Nested fyc exclusions remain cumulative. Scans can traverse git-ignored directories to reach a nested fyc override without exposing ignored files in neighbouring branches. Sub-agents retain the parent's scopes and honour local overrides. `.dockerignore` and `.ignore` are not interpreted. `.git` and the `.gitignore`/`.fycignore` rule files themselves remain blocked.
 - Tool availability is explicit and persisted in `tool_states`; disabled tools are not sent to the model.
 - LSP tools are additionally hidden at runtime unless compatible language servers are discovered for the workspace.
 - Git tools run `git` directly with an argv (never through a shell), a sanitized non-interactive environment (`GIT_TERMINAL_PROMPT=0`, no editor, no pager), a hard timeout, credential redaction on all output, and validation of every path/revision supplied by the model (workspace-bounded, `.git` internals unreachable).

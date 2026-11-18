@@ -14,34 +14,27 @@ import (
 // ignoreFile pairs a compiled matcher with the directory it applies to.
 type ignoreFile struct {
 	matcher         *gitignore.GitIgnore
+	fyc             bool
 	scopeDir        string // directory containing the ignore file, relative to restrictedRoot
 	scopeAbs        string // precomputed absolute scope directory
 	normalizedScope string // precomputed scopeAbs + separator
 }
 
-// IgnoreManager holds scoped ignore rules for .gitignore, .dockerignore, and .fycignore files.
+// IgnoreManager holds scoped .gitignore and .fycignore rules.
 type IgnoreManager struct {
 	files         []ignoreFile
 	gitDir        string // precomputed: restrictedRoot + "/.git"
 	gitDirWithSep string // precomputed: gitDir + separator
 }
 
-// LoadIgnoreFiles walks the restricted root, collecting all ignore files
-// and compiling them into matchers. Each matcher is scoped to the directory
-// where its ignore file resides, so that a .gitignore in a subdirectory
-// (e.g., dist/.gitignore with "*") only applies within that subdirectory.
+// LoadIgnoreFiles collects both ignore families. A .fycignore replaces all
+// applicable git rules within its subtree, even when the fyc file is empty.
 func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
 	gitDir := filepath.Join(restrictedRoot, ".git")
 	im := &IgnoreManager{
 		gitDir:        gitDir,
 		gitDirWithSep: gitDir + string(filepath.Separator),
 	}
-	ignoreNames := []string{".gitignore", ".dockerignore", ".fycignore"}
-	ignoreSet := make(map[string]struct{}, len(ignoreNames))
-	for _, n := range ignoreNames {
-		ignoreSet[n] = struct{}{}
-	}
-
 	var mu sync.Mutex
 	conf := fastwalk.Config{Follow: false}
 	fastwalk.Walk(&conf, restrictedRoot, func(path string, d fs.DirEntry, err error) error {
@@ -55,7 +48,7 @@ func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
 			}
 			return nil
 		}
-		if _, ok := ignoreSet[d.Name()]; !ok {
+		if d.Name() != ".gitignore" && d.Name() != ".fycignore" {
 			return nil
 		}
 		matcher, err := gitignore.CompileIgnoreFile(path)
@@ -73,6 +66,7 @@ func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
 		}
 		entry := ignoreFile{
 			matcher:         matcher,
+			fyc:             d.Name() == ".fycignore",
 			scopeDir:        scopeDir,
 			scopeAbs:        scopeAbs,
 			normalizedScope: strings.TrimSuffix(scopeAbs, string(filepath.Separator)) + string(filepath.Separator),
@@ -95,9 +89,9 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 	if im.gitDirWithSep != "" && (absPath == im.gitDir || strings.HasPrefix(absPath, im.gitDirWithSep)) {
 		return true
 	}
-	// Always block access to ignore files themselves (.gitignore, .fycignore, .dockerignore)
+	// Always block access to the rule files themselves.
 	baseName := filepath.Base(absPath)
-	if baseName == ".gitignore" || baseName == ".fycignore" || baseName == ".dockerignore" {
+	if baseName == ".gitignore" || baseName == ".fycignore" {
 		return true
 	}
 	// Probe the filesystem only when a directory-only rule could match.
@@ -110,7 +104,29 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 		}
 		return dir
 	}
+	// A local fyc file replaces inherited git rules, not just a neighbouring file.
+	useFYC := false
 	for _, f := range im.files {
+		if f.fyc && (absPath == f.scopeAbs || strings.HasPrefix(absPath, f.normalizedScope)) {
+			useFYC = true
+			break
+		}
+	}
+	// Keep scans able to reach overrides inside directories excluded by git.
+	containsFYC := false
+	if !useFYC {
+		prefix := strings.TrimSuffix(absPath, string(filepath.Separator)) + string(filepath.Separator)
+		for _, f := range im.files {
+			if f.fyc && strings.HasPrefix(f.scopeAbs, prefix) {
+				containsFYC = true
+				break
+			}
+		}
+	}
+	for _, f := range im.files {
+		if !f.fyc && (useFYC || (containsFYC && isDir())) {
+			continue
+		}
 		// Skip if path is outside this rule's scope
 		if !strings.HasPrefix(absPath, f.normalizedScope) && absPath != f.scopeAbs {
 			continue

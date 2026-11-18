@@ -398,8 +398,8 @@ func buildSubagentIgnore(parentIgnore *IgnoreManager, absSubdir string) *IgnoreM
 		return nil
 	}
 
-	// Serve both the "reuse parent rules" and "merge" cases with a single
-	// manager: copy-on-merge never aliases the parent's backing array.
+	// Preserve inherited scopes while collecting new local overrides.
+	// Copy-on-merge never aliases the parent's backing array.
 	files := parentIgnore.files
 	if localIgnore := LoadIgnoreFiles(absSubdir); len(localIgnore.files) > 0 {
 		files = make([]ignoreFile, 0, len(parentIgnore.files)+len(localIgnore.files))

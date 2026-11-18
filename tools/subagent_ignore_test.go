@@ -97,3 +97,46 @@ func TestZeroValueIgnoreManagerDoesNotDenyAll(t *testing.T) {
 		t.Error("zero-value IgnoreManager denied an arbitrary path")
 	}
 }
+
+func TestBuildSubagentIgnoreHonoursLocalFYC(t *testing.T) {
+	for _, useFYC := range []bool{false, true} {
+		name := ".gitignore"
+		if useFYC {
+			name = ".fycignore"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sub := filepath.Join(root, "sub")
+			deep := filepath.Join(sub, "deep")
+			if err := os.MkdirAll(deep, 0755); err != nil {
+				t.Fatal(err)
+			}
+			writeToolTestFile(t, root, ".gitignore", "root-git.txt\n")
+			if useFYC {
+				writeToolTestFile(t, root, ".fycignore", "root-fyc.txt\n")
+			}
+			writeToolTestFile(t, sub, ".gitignore", "local-git.txt\n")
+			writeToolTestFile(t, sub, ".fycignore", "local-fyc.txt\n")
+			writeToolTestFile(t, deep, ".gitignore", "deep-git.txt\n")
+			writeToolTestFile(t, deep, ".fycignore", "deep-fyc.txt\n")
+			parent := LoadIgnoreFiles(root)
+			for _, dir := range []string{sub, deep} {
+				im := buildSubagentIgnore(parent, dir)
+				for path, want := range map[string]bool{
+					"root-git.txt":  false,
+					"root-fyc.txt":  useFYC,
+					"local-git.txt": false,
+					"local-fyc.txt": true,
+					"deep-git.txt":  false,
+					"deep-fyc.txt":  dir == deep,
+					".git/HEAD":     true,
+				} {
+					if got := im.IsIgnored(filepath.Join(dir, path), dir); got != want {
+						t.Errorf("%s: IsIgnored(%q) = %v, want %v", dir, path, got, want)
+					}
+				}
+				parent = im
+			}
+		})
+	}
+}
