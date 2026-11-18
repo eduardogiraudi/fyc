@@ -287,7 +287,7 @@ func TestRunnerUpToDate(t *testing.T) {
 
 func TestSandboxRunnerExitStatus(t *testing.T) {
 	err := sandboxRunnerExitError(7)
-	if got := shCommandStatus(err, nil, shDefaultTimeout); !strings.HasPrefix(got, "command failed: exit code 7") {
+	if got := shCommandStatus(err, nil, shDefaultTimeout); got != "[command completed, exit code 7]" {
 		t.Fatal(got)
 	}
 }

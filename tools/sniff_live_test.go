@@ -146,7 +146,7 @@ func TestShLiveOneShot(t *testing.T) {
 	}{
 		{"beyond ten seconds", "echo boot; sleep 12; echo completed", "exit code 0", "completed", 20, 0},
 		{"quick success", "echo quick", "exit code 0", "quick", 120, 0},
-		{"failure with output", "echo failure-details; exit 7", "command failed: exit code 7", "failure-details", 120, 0},
+		{"nonzero exit with output", "echo failure-details; exit 7", "[command completed, exit code 7]", "failure-details", 120, 0},
 		{"timeout", "echo partial; sleep 30; echo must-not-complete", "command timed out", "partial", 1, 0},
 		{"cancellation", "echo partial; sleep 30; echo must-not-complete", "command cancelled", "partial", 120, time.Second},
 	} {
