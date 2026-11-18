@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // MarkdownRenderer encapsulates a glamour renderer with configurable width.
@@ -48,5 +49,17 @@ func (m *MarkdownRenderer) Render(s string) string {
 	if err != nil {
 		return s
 	}
-	return strings.TrimLeft(out, "\n")
+	// Glamour pads rows to the wrap width, even with zero margins. Keep
+	// source indentation, but never put that decorative padding on the clipboard.
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		plain := ansi.Strip(line)
+		trimmed := strings.TrimRight(plain, " ")
+		if trimmed == "" {
+			lines[i] = ""
+		} else if len(trimmed) != len(plain) {
+			lines[i] = closeStyles(ansi.Cut(line, 0, ansi.StringWidth(trimmed)))
+		}
+	}
+	return strings.TrimLeft(strings.Join(lines, "\n"), "\n")
 }

@@ -53,7 +53,7 @@ var customStyle = []byte(`{
   "document": {
     "color": "#e2e0d9",
     "background_color": "",
-    "margin": 1
+    "margin": 0
   },
   "paragraph": {
     "color": "#e2e0d9",
@@ -91,13 +91,13 @@ var customStyle = []byte(`{
   "code": {
     "color": "#fc8403",
     "background_color": "#1e1c18",
-    "prefix": " ",
-    "suffix": " "
+    "prefix": "",
+    "suffix": ""
   },
   "code_block": {
       "color": "#cdd6f4",
       "background_color": "#1e1e2e",
-      "margin": 1,
+      "margin": 0,
       "theme": "monokai",
       "chroma": {
         "text":              { "color": "#cdd6f4" },
@@ -390,32 +390,33 @@ func (m *MarkdownStreamRenderer) eraseRawLines() {
 // top-level block boundary (blank line outside a code fence) in s.
 // Returns 0 if no complete block boundary found.
 func LastCompletedBlockBoundary(s string) int {
-	inFence := false
-	last := 0
-	pos := 0
-
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
+	var fence byte
+	fenceLen := 0
+	last, pos := 0, 0
+	for pos < len(s) {
+		n := strings.IndexByte(s[pos:], '\n')
+		if n < 0 {
+			break
+		}
+		line := strings.TrimSuffix(s[pos:pos+n], "\r")
+		lineEnd := pos + n + 1
 		trimmed := strings.TrimSpace(line)
-
-		// Toggle code fence state.
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent <= 3 && len(trimmed) >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
+			char := trimmed[0]
+			run := len(trimmed) - len(strings.TrimLeft(trimmed, string(char)))
+			if fence == 0 && run >= 3 && (char != '`' || !strings.Contains(trimmed[run:], "`")) {
+				fence, fenceLen = char, run
+			} else if char == fence && run >= fenceLen && strings.TrimSpace(trimmed[run:]) == "" {
+				fence, fenceLen = 0, 0
+			}
 		}
-
-		lineEnd := pos + len(line) + 1 // +1 for the consumed \n
-		if lineEnd > len(s) {
-			lineEnd = len(s)
-		}
-
-		// Blank line outside fence = block boundary.
-		if !inFence && trimmed == "" && i > 0 {
+		// A trailing empty split segment is not a received blank line.
+		if fence == 0 && trimmed == "" && pos > 0 {
 			last = lineEnd
 		}
-
 		pos = lineEnd
 	}
-
 	return last
 }
 
