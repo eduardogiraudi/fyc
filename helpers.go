@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"fuckyourcli/config"
+	"fuckyourcli/internal/mentions"
 	"fuckyourcli/logger"
 	"fuckyourcli/mcp"
 	"fuckyourcli/modes"
@@ -458,6 +459,16 @@ func newSession() *ChatSession {
 // buildSuggestionProvider returns a function that filters commands by prefix for autocomplete.
 func buildSuggestionProvider(s *ChatSession) ui.SuggestionProvider {
 	return func(line string) (matches []ui.Suggestion, extraLine string) {
+		if ref, active := mentions.Active(line); active {
+			paths, err := tools.PromptFileSuggestions(ref.Path, s.RestrictedRoot, s.GlobalIgnore)
+			if err != nil {
+				return nil, "Files: " + err.Error()
+			}
+			for _, path := range paths {
+				matches = append(matches, ui.Suggestion{Name: mentions.Tag(path), Description: "attach file"})
+			}
+			return matches, "Files: ↑/↓ select · Tab/Enter insert · Esc dismiss (200 matches / 4096 entries max)"
+		}
 		if strings.HasPrefix(line, "/skills") {
 			skills := tools.DiscoverSkills(s.RestrictedRoot)
 			query := strings.TrimSpace(strings.TrimPrefix(line, "/skills"))

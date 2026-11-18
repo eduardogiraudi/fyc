@@ -359,10 +359,18 @@ func convertMessagesToCodexInput(messages []types.Message, model string) []map[s
 	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
-			input = append(input, map[string]interface{}{
-				"role":    "user",
-				"content": msg.Content,
-			})
+			var content any = msg.Content
+			if len(msg.Images) > 0 {
+				var parts []map[string]interface{}
+				if msg.Content != "" {
+					parts = append(parts, map[string]interface{}{"type": "input_text", "text": msg.Content})
+				}
+				for _, img := range msg.Images {
+					parts = append(parts, map[string]interface{}{"type": "input_image", "image_url": "data:" + img.MIMEType + ";base64," + img.Data})
+				}
+				content = parts
+			}
+			input = append(input, map[string]interface{}{"role": "user", "content": content})
 		case "assistant":
 			// Replay the reasoning item first (it precedes the assistant output):
 			// required to keep reasoning continuity when the server keeps no state.

@@ -485,8 +485,15 @@ func convertMessagesToAnthropic(messages []types.Message) ([]anthropicContentBlo
 			}
 		case "user":
 			lastWasToolResult = false
+			var blocks []anthropicContentBlock
 			if msg.Content != "" {
-				result = append(result, anthropicMessage{Role: "user", Content: []anthropicContentBlock{{Type: "text", Text: msg.Content}}})
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
+			}
+			for _, img := range msg.Images {
+				blocks = append(blocks, anthropicContentBlock{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: img.MIMEType, Data: img.Data}})
+			}
+			if len(blocks) > 0 {
+				result = append(result, anthropicMessage{Role: "user", Content: blocks})
 			}
 		case "assistant":
 			lastWasToolResult = false

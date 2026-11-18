@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -97,7 +98,8 @@ func TestHistoryPreservesLargeMultilinePrompts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows exposes only the writable bit, not POSIX owner/group permissions.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("history permissions = %o, want 600", info.Mode().Perm())
 	}
 }

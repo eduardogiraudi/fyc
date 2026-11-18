@@ -97,6 +97,14 @@ Handy commands inside the chat:
 
 See the [full command list](docs/DOCS.md#usage) for the rest.
 
+### Attach files in chat
+
+Use `@test.py` to include a UTF-8 text file or `@foto.png` to attach an image (PNG, JPEG or GIF; requires an image-capable model). Quote paths containing spaces: `@"my dir/test.py"`.
+
+Type `@` to browse workspace paths: ↑/↓ selects, Tab or Enter inserts, Esc dismisses. Suggestions browse one directory at a time (up to 200 matches among its first 4096 entries). The prompt remains editable, including on multiple lines. Email addresses, URLs, code blocks and escaped `\@mentions` remain literal.
+
+Attachments respect workspace confinement and ignore files; symlinks and directories cannot be attached. Limits: 1024 characters per path, 8 distinct files, 256 KiB per text file, 512 KiB total text and an estimated 32,000-token attachment budget. Images reuse `read_media` limits (12 MiB/file, 50 million pixels, automatic downscaling), with 24 MiB total base64 data and the current `max_media` image-count limit. Included files are listed before sending; an invalid or oversized attachment rejects the prompt without truncating it.
+
 ## Documentation
 
 Everything else lives in [docs/DOCS.md](docs/DOCS.md):

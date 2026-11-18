@@ -66,11 +66,30 @@ type OpenAIMessage struct {
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// Reasoning and Thinking are the other names the same piece of text travels
 	// under (see reasoningDelta): they are only ever read from a response.
-	Reasoning  string           `json:"reasoning,omitempty"`
-	Thinking   string           `json:"thinking,omitempty"`
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	Reasoning  string                  `json:"reasoning,omitempty"`
+	Thinking   string                  `json:"thinking,omitempty"`
+	Name       string                  `json:"name,omitempty"`
+	ToolCallID string                  `json:"tool_call_id,omitempty"`
+	ToolCalls  []OpenAIToolCall        `json:"tool_calls,omitempty"`
+	Images     []types.ImageAttachment `json:"-"`
+}
+
+func (m OpenAIMessage) MarshalJSON() ([]byte, error) {
+	type plain OpenAIMessage
+	if m.Role != "user" || len(m.Images) == 0 {
+		return json.Marshal(plain(m))
+	}
+	var parts []map[string]any
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, img := range m.Images {
+		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:" + img.MIMEType + ";base64," + img.Data}})
+	}
+	return json.Marshal(struct {
+		plain
+		Content []map[string]any `json:"content"`
+	}{plain(m), parts})
 }
 
 // reasoningDelta returns the reasoning text carried by one streamed delta.
@@ -233,7 +252,10 @@ func convertMessagesToOpenAI(messages []types.Message) []OpenAIMessage {
 		// Chat Completions tool messages cannot carry images. If history
 		// contains image attachments (e.g. screenshots taken with another
 		// provider), replace them with a text placeholder instead of failing.
-		if len(msg.Images) > 0 {
+		if msg.Role == "user" {
+			openaiMsg.Images = msg.Images
+		}
+		if msg.Role != "user" && len(msg.Images) > 0 {
 			const note = "[image omitted: the OpenAI Completions API does not support images in tool results]"
 			if openaiMsg.Content == "" {
 				openaiMsg.Content = note

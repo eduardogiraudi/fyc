@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"fmt"
+	"fuckyourcli/internal/mentions"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
@@ -62,11 +63,12 @@ type inputModel struct {
 	searchIdx    int
 	searchCol    int
 
-	suggProvider SuggestionProvider
-	suggestions  []Suggestion
-	suggExtra    string
-	suggSelected int
-	suggOffset   int
+	suggProvider  SuggestionProvider
+	suggestions   []Suggestion
+	suggExtra     string
+	suggSelected  int
+	suggOffset    int
+	suggDismissed string
 
 	submitted bool
 	value     string
@@ -211,10 +213,31 @@ func (m inputModel) firstLine() string {
 	return string(m.lines[0])
 }
 
+func (m inputModel) cursorPrefix() string {
+	var parts []string
+	for i := 0; i < m.row; i++ {
+		parts = append(parts, string(m.lines[i]))
+	}
+	parts = append(parts, string(m.lines[m.row][:m.col]))
+	return strings.Join(parts, "\n")
+}
+
 func (m inputModel) updateSuggestions() inputModel {
 	if m.suggProvider != nil {
 		previous := m.suggestions
-		m.suggestions, m.suggExtra = m.suggProvider(m.firstLine())
+		prefix := m.cursorPrefix()
+		if prefix != "" && prefix == m.suggDismissed {
+			m.suggestions, m.suggExtra = nil, ""
+			return m
+		}
+		m.suggDismissed = ""
+		if _, active := mentions.Active(prefix); active {
+			m.suggestions, m.suggExtra = m.suggProvider(prefix)
+		} else if m.row == 0 && m.col == len(m.lines[0]) {
+			m.suggestions, m.suggExtra = m.suggProvider(m.firstLine())
+		} else {
+			m.suggestions, m.suggExtra = nil, ""
+		}
 		changed := len(previous) != len(m.suggestions)
 		if !changed {
 			for i, s := range m.suggestions {
@@ -273,6 +296,10 @@ func commonSuggestionPrefix(suggestions []Suggestion) string {
 }
 
 func (m inputModel) completeSuggestion() inputModel {
+	if _, active := mentions.Active(m.cursorPrefix()); active {
+		m = m.updateSuggestions()
+		return m.acceptSelectedSuggestion()
+	}
 	if m.row != 0 || m.col != len(m.lines[0]) {
 		return m
 	}
@@ -307,6 +334,36 @@ func (m inputModel) acceptSelectedSuggestion() inputModel {
 		return m
 	}
 	completion := m.suggestions[m.suggSelected].Name
+	if ref, active := mentions.Active(m.cursorPrefix()); active && strings.HasPrefix(completion, "@") {
+		start := ref.Start
+		for i := 0; i < m.row; i++ {
+			start -= len(m.lines[i]) + 1
+		}
+		if start < 0 {
+			return m
+		}
+		end := m.col
+		// Replace the complete token when editing in its middle, not just its prefix.
+		for _, full := range mentions.Scan(m.fullText(), true) {
+			if full.Start == ref.Start {
+				end = m.col + full.End - ref.End
+				break
+			}
+		}
+		end = min(end, len(m.lines[m.row]))
+		if !strings.HasSuffix(strings.TrimSuffix(completion, "\""), "/") {
+			completion += " "
+		}
+		line := append([]rune{}, m.lines[m.row][:start]...)
+		line = append(line, []rune(completion)...)
+		line = append(line, m.lines[m.row][end:]...)
+		m.lines[m.row] = line
+		m.col = start + len([]rune(completion))
+		if strings.HasSuffix(completion, "/\"") {
+			m.col--
+		}
+		return m.updateSuggestions()
+	}
 	if strings.HasPrefix(m.firstLine(), "/skills") && completion != "/skills" {
 		completion += " "
 	}
@@ -615,6 +672,10 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.updateSuggestions()
 
 		// ── quit without submit ─────────────────────────────────────────────
+		case tea.KeyEsc:
+			m.suggDismissed = m.cursorPrefix()
+			m.suggestions, m.suggExtra = nil, ""
+			return m, nil
 		case tea.KeyCtrlC:
 			m.submitted = false
 			m.value = ""
@@ -629,6 +690,13 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.Type {
+		case tea.KeyLeft, tea.KeyRight, tea.KeyCtrlLeft, tea.KeyCtrlRight,
+			tea.KeyUp, tea.KeyDown, tea.KeyHome, tea.KeyEnd, tea.KeyCtrlA, tea.KeyCtrlE, tea.KeyCtrlJ:
+			m = m.updateSuggestions()
+		}
+	}
 	m.adjustSuggestionOffset()
 	return m, nil
 }

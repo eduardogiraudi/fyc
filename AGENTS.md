@@ -6,7 +6,7 @@ fuckyourcli (fyc) is a Go CLI coding agent. Single Go module `fuckyourcli`, Go 1
 - The sandbox masks `.git`: always pass `-buildvcs=false` to Go commands.
   The `sh` tool injects it automatically; use `GOFLAGS=-buildvcs=false go doc ...` for documentation (go doc does not accept the flag directly), and add it yourself in editor and CI runs.
 - Build: `go build -buildvcs=false ./...`
-- Test: `go test -buildvcs=false ./...`
+- Test: `go test -buildvcs=false ./...`. Windows exposes writable/read-only bits, not POSIX owner/group permissions.
 - Vet: `go vet -buildvcs=false ./...`
 - Fallback extractor (no cgo): `CGO_ENABLED=0 go test -buildvcs=false ./tools/`
 

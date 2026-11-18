@@ -220,7 +220,12 @@ func convertMessagesToGeminiNative(messages []types.Message, supportsImages bool
 			contents = append(contents, GeminiContent{Parts: parts, Role: "user"})
 
 		case "user":
-			parts = append(parts, GeminiPart{Text: msg.Content})
+			if msg.Content != "" {
+				parts = append(parts, GeminiPart{Text: msg.Content})
+			}
+			for _, img := range msg.Images {
+				parts = append(parts, GeminiPart{InlineData: &GeminiInlineData{MimeType: img.MIMEType, Data: img.Data, DisplayName: img.Name}})
+			}
 			contents = append(contents, GeminiContent{Parts: parts, Role: "user"})
 
 		case "assistant":

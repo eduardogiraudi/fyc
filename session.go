@@ -107,6 +107,7 @@ func (s *ChatSession) ProcessInput(input string) bool {
 	}
 
 	s.saveHistoryEntry(input)
+	fileInput := input
 
 	handled, modifiedInput := handleSlashCommand(input, s)
 	if handled {
@@ -130,6 +131,14 @@ func (s *ChatSession) ProcessInput(input string) bool {
 		activeMode = mode
 		input = content
 		displayOneShot = true
+	}
+
+	if strings.TrimSpace(input) == "" && activeMode != nil {
+		input = "Proceed with " + activeMode.Name + " mode."
+	}
+	prompt, ok := s.attachPromptFiles(input, fileInput)
+	if !ok {
+		return true
 	}
 
 	// A one-shot prefix mode (/debug ..., /plan ...) applies its tool policy to
@@ -168,14 +177,7 @@ func (s *ChatSession) ProcessInput(input string) bool {
 		}
 	}
 
-	if strings.TrimSpace(input) == "" && activeMode != nil {
-		input = "Proceed with " + activeMode.Name + " mode."
-	}
-
-	s.ChatHistory = append(s.ChatHistory, types.Message{
-		Role:    "user",
-		Content: input,
-	})
+	s.ChatHistory = append(s.ChatHistory, prompt)
 
 	streamChat(s)
 
