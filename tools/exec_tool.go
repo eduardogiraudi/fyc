@@ -358,7 +358,7 @@ func shCommandStatus(cmdErr, ctxErr error, timeout time.Duration) string {
 		return "[command completed, exit code 0]"
 	}
 	if exitErr, ok := cmdErr.(interface{ ExitCode() int }); ok {
-		return fmt.Sprintf("command failed: exit code %d (%v)", exitErr.ExitCode(), cmdErr)
+		return fmt.Sprintf("[command completed, exit code %d]", exitErr.ExitCode())
 	}
 	return fmt.Sprintf("command failed: %v", cmdErr)
 }

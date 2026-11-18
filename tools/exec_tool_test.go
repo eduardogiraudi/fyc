@@ -398,13 +398,36 @@ func TestShTimeoutAndCancellation(t *testing.T) {
 	}
 }
 
-func TestShFailurePreservesOutputAndExitCode(t *testing.T) {
+func TestShNonzeroExitPreservesOutputAndExitCode(t *testing.T) {
 	proc, out, _, _, _ := startShMonitorTest(t, false, time.Second, 10*time.Millisecond)
 	proc.write(t, "failure details\n")
 	proc.finish(shTestExitError(7))
 	result := shMonitorResult(t, out)
-	if !strings.HasPrefix(result, "command failed: exit code 7") || !strings.Contains(result, "failure details") {
+	if !strings.HasPrefix(result, "[command completed, exit code 7]\n") || !strings.Contains(result, "failure details") {
 		t.Fatal(result)
+	}
+}
+
+func TestShCommandStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		cmdErr error
+		ctxErr error
+		want   string
+	}{
+		{"zero", nil, nil, "[command completed, exit code 0]"},
+		{"no matches or differences", shTestExitError(1), nil, "[command completed, exit code 1]"},
+		{"other nonzero", shTestExitError(2), nil, "[command completed, exit code 2]"},
+		{"execution error", fmt.Errorf("cannot start process"), nil, "command failed: cannot start process"},
+		{"timeout", shTestExitError(1), context.DeadlineExceeded, "error: command timed out (timeout 1s); process terminated"},
+		{"cancelled", shTestExitError(1), context.Canceled, "error: command cancelled; process terminated"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shCommandStatus(tc.cmdErr, tc.ctxErr, time.Second); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -456,7 +479,7 @@ func TestShStatusSurvivesOutputTruncation(t *testing.T) {
 	proc.write(t, strings.Repeat("x", 40000))
 	proc.finish(shTestExitError(2))
 	result := shMonitorResult(t, out)
-	if !strings.HasPrefix(result, "command failed: exit code 2") || !strings.Contains(result, "output truncated") {
+	if !strings.HasPrefix(result, "[command completed, exit code 2]\n") || !strings.Contains(result, "output truncated") {
 		t.Fatal("exit status lost when truncating output")
 	}
 }
