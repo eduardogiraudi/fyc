@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -192,6 +193,38 @@ func (s *TerminalOutputSink) PrintBlock(text string) {
 		return
 	}
 	PrintRenderedBlock(text)
+}
+
+func (s *TerminalOutputSink) BeginStreamAttempt(ctx context.Context) bool {
+	reply := make(chan bool, 1)
+	if ctx.Err() != nil || !s.send(StreamAttemptBeginMsg{Reply: reply}) {
+		return false
+	}
+	select {
+	case supported := <-reply:
+		return supported
+	case <-ctx.Done():
+		// The begin message may already have installed a snapshot.
+		s.EndStreamAttempt()
+		return false
+	}
+}
+
+func (s *TerminalOutputSink) RollbackStreamAttempt(ctx context.Context) bool {
+	reply := make(chan bool, 1)
+	if ctx.Err() != nil || !s.send(StreamAttemptRollbackMsg{Reply: reply}) {
+		return false
+	}
+	select {
+	case restored := <-reply:
+		return restored
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *TerminalOutputSink) EndStreamAttempt() {
+	s.send(StreamAttemptEndMsg{})
 }
 
 func (s *TerminalOutputSink) Reset() {

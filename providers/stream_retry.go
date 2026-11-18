@@ -71,17 +71,14 @@ func (e *streamIdleError) Unwrap() []error {
 	return []error{context.DeadlineExceeded, ErrStreamIdle}
 }
 
-// MaxStreamResends bounds the extra sampling requests attempted when a request
-// fails before producing any output. The budget stays smaller than the HTTP one:
-// every resend is a full sampling request, a wedged backend desynchronizes the
-// conversation when it finally answers, and the user is waiting on a spinner
-// the whole time.
+// MaxStreamResends bounds extra sampling requests after transient failures.
+// Each resend is a full sampling request, so keep this below the HTTP budget.
 const MaxStreamResends = 3
 
 // StreamResendRetryable reports whether a failed sampling request may be
 // resent because the failure is connection-level: the provider went idle, or the
-// response body died mid-stream. Callers must verify separately that nothing was
-// shown to the user yet, since only then does a resend avoid duplicating output.
+// response body died mid-stream. Callers must separately ensure any visible
+// output can be retracted before resending.
 //
 // Failures doWithRetry already retried until exhaustion are excluded: resending
 // them here would multiply the attempts behind the user's back.
@@ -133,13 +130,11 @@ func WaitStreamResend(ctx context.Context, sink types.OutputSink, resend int, de
 	})
 }
 
-// resendSink records whether a provider has already shown something the user can
-// see. Streamed output is committed as completed text by the TUI (and already
-// delivered by the AG-UI sink), so only a request that failed silently can be
-// resent without duplicating the answer.
+// resendSink tracks visible output; only retractable frames may replay it.
 type resendSink struct {
 	types.OutputSink
-	wrote bool
+	wrote      bool
+	toolOutput bool
 }
 
 func (s *resendSink) WriteText(token string) {
@@ -174,18 +169,16 @@ func (s *resendSink) WriteDiffCraftFor(label string, add, del int) {
 
 func (s *resendSink) WriteToolOutput(label, res string) {
 	s.wrote = true
+	s.toolOutput = true
 	s.OutputSink.WriteToolOutput(label, res)
 }
 
 type resendProvider struct{ types.Provider }
 
-// WithStreamResend makes StreamChat resend a sampling request that fails before
-// producing any visible output (provider idle, connection dropped mid-response).
-// Ordinary failures use MaxStreamResends; in-band rate limits use the HTTP 429
-// budget. A resend is safe only there: the caller's history is untouched on
-// failure and no tool has run yet, so nothing is replayed or duplicated. A
-// stream that already produced visible output is never resent: the caller
-// surfaces the error (the chat loop then offers /retry).
+// WithStreamResend retries transient sampling failures without touching history
+// or executing tools. Visible output requires a sink that can retract the
+// failed attempt (the alt-screen TUI); REPL and AG-UI keep manual retry.
+// Ordinary failures use MaxStreamResends; in-band rate limits use the HTTP budget.
 func WithStreamResend(p types.Provider) types.Provider {
 	if p == nil {
 		return nil
@@ -197,10 +190,17 @@ func (p *resendProvider) StreamChat(ctx context.Context, messages []types.Messag
 	if sink == nil {
 		sink = NewSilentOutputSink()
 	}
+	rollback, supportsRollback := sink.(types.StreamAttemptSink)
+	if supportsRollback {
+		supportsRollback = rollback.BeginStreamAttempt(ctx)
+		if supportsRollback {
+			defer rollback.EndStreamAttempt()
+		}
+	}
 	for attemptNumber := 1; ; attemptNumber++ {
 		attempt := &resendSink{OutputSink: sink}
 		result, err := p.Provider.StreamChat(ctx, messages, tools, attempt)
-		if err == nil || attempt.wrote || !StreamResendRetryable(ctx, err) {
+		if err == nil || (attempt.wrote && !supportsRollback) || attempt.toolOutput || !StreamResendRetryable(ctx, err) {
 			return result, err
 		}
 
@@ -220,6 +220,9 @@ func (p *resendProvider) StreamChat(ctx context.Context, messages []types.Messag
 			return result, err
 		}
 
+		if supportsRollback && !rollback.RollbackStreamAttempt(ctx) {
+			return result, err
+		}
 		delay := withJitter(StreamResendDelay(attemptNumber))
 		if rateLimited {
 			if !waitRetry(ctx, sink, attemptNumber, limit, delay, reason) {

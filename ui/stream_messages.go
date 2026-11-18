@@ -32,6 +32,11 @@ type StreamHookLineMsg struct{ Text string }
 type StreamResetMsg struct{}
 type StreamFinalizeMsg struct{}
 
+// Attempt replies acknowledge rollback support in the actual running frame.
+type StreamAttemptBeginMsg struct{ Reply chan bool }
+type StreamAttemptRollbackMsg struct{ Reply chan bool }
+type StreamAttemptEndMsg struct{}
+
 // StreamPauseMsg asks the chat model to flush all transient state and release
 // the terminal. Ready is closed by the model once ReleaseTerminal has been
 // called, so the sender can block on it to guarantee the stdin handoff is

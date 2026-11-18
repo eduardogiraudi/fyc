@@ -353,3 +353,12 @@ type DiffCraftSink interface {
 type StatusLineSink interface {
 	WriteStatusLine(text string)
 }
+
+// StreamAttemptSink can retract a failed sampling request's output without
+// undoing earlier tool batches. Begin must confirm the running UI supports it.
+// End keeps the last attempt visible, including when retries are exhausted.
+type StreamAttemptSink interface {
+	BeginStreamAttempt(ctx context.Context) bool
+	RollbackStreamAttempt(ctx context.Context) bool
+	EndStreamAttempt()
+}

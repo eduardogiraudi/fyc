@@ -49,7 +49,8 @@ type chatModel struct {
 	// transcript is non-nil only in alt-screen mode (config alt_screen): the
 	// completed output is kept here, in the running program, because the
 	// alternate screen has no scrollback to hold it.
-	transcript *transcriptState
+	transcript    *transcriptState
+	streamAttempt *transcriptState
 
 	// modal is an interactive screen (a permission selector, a settings menu, a
 	// typed confirmation) hosted inside the frame instead of in a nested
@@ -250,10 +251,41 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case generationDoneMsg:
 		m.generating = false
 		m.suppressGeneratingMsg = false
+		m.streamAttempt = nil
 		cmds = append(cmds, m.flushTextCmd())
 		cmds = append(cmds, m.finishReasoningCmd())
 		m.clearTransient()
 		m.statsProviderInfo = currentProviderLine()
+
+	case ui.StreamAttemptBeginMsg:
+		supported := m.transcript != nil && m.streamAttempt == nil
+		if supported {
+			m.flushTextCmd()
+			m.finishReasoningCmd()
+			m.clearTransient()
+			snapshot := *m.transcript
+			snapshot.lines = append([]string(nil), snapshot.lines...)
+			m.streamAttempt = &snapshot
+		}
+		msg.Reply <- supported
+
+	case ui.StreamAttemptRollbackMsg:
+		restored := m.transcript != nil && m.streamAttempt != nil
+		if restored {
+			*m.transcript = *m.streamAttempt
+			m.transcript.lines = append([]string(nil), m.streamAttempt.lines...)
+			m.transcript.SelectionClear()
+			m.textBuf = ""
+			m.reasoning = ui.NewReasoningView(m.width, reasoningHeight(m.height))
+			m.clearTransient()
+			m.activeSpinnerLabel = ""
+			m.copyNotice = ""
+			m.hover = hoverNone
+		}
+		msg.Reply <- restored
+
+	case ui.StreamAttemptEndMsg:
+		m.streamAttempt = nil
 
 	case ui.StreamResetMsg:
 		cmds = append(cmds, m.flushTextCmd())
@@ -691,6 +723,7 @@ func isChatStreamMsg(msg tea.Msg) bool {
 		ui.StreamInterruptMsg, ui.StreamNewlineMsg, ui.StreamStatsMsg,
 		ui.StreamHookLineMsg, ui.StreamFinalizeMsg, ui.StreamPauseMsg,
 		ui.StreamPrintMsg, ui.StreamResumeMsg, ui.StreamSubagentPanelMsg,
+		ui.StreamAttemptBeginMsg, ui.StreamAttemptRollbackMsg, ui.StreamAttemptEndMsg,
 		generationDoneMsg:
 		return true
 	}
