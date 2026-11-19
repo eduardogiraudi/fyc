@@ -63,6 +63,12 @@ type inputModel struct {
 	searchIdx    int
 	searchCol    int
 
+	// hovered/hoverIdx: the popup item under the pointer (a suggestion index,
+	// or a history index while searching). Cleared by any key, because the
+	// pointer position no longer says what the user is aiming at.
+	hovered  bool
+	hoverIdx int
+
 	suggProvider  SuggestionProvider
 	suggestions   []Suggestion
 	suggExtra     string
@@ -484,6 +490,40 @@ func (m inputModel) suggestionMouseTarget(y int) (index int, item, inside bool) 
 	return 0, false, true
 }
 
+// hoverAt highlights the popup item at row y of View, or clears the highlight
+// when the pointer is not over one.
+func (m inputModel) hoverAt(y int) inputModel {
+	var (
+		index int
+		item  bool
+	)
+	if m.searchActive {
+		index, item, _ = m.historySearchMouseTarget(y)
+	} else {
+		index, item, _ = m.suggestionMouseTarget(y)
+	}
+	m.hovered, m.hoverIdx = item, index
+	return m
+}
+
+// UpdateHover follows a button-less pointer move (coordinates relative to
+// View) so the popup row under it is drawn like a hovered button.
+func (m inputModel) UpdateHover(msg tea.MouseMsg) InputModel {
+	if msg.Action != tea.MouseActionMotion || msg.Button != tea.MouseButtonNone {
+		return m
+	}
+	return m.hoverAt(msg.Y)
+}
+
+// HoverActive reports whether a popup row is currently highlighted.
+func (m inputModel) HoverActive() bool { return m.hovered }
+
+// ClearHover drops the highlight, e.g. when the input is no longer on screen.
+func (m inputModel) ClearHover() InputModel {
+	m.hovered = false
+	return m
+}
+
 // UpdateMouse handles coordinates relative to View. The chat translates screen
 // rows after final frame clipping, so a click can only hit a visible input popup.
 func (m inputModel) UpdateMouse(msg tea.MouseMsg) (InputModel, tea.Cmd, bool) {
@@ -506,11 +546,13 @@ func (m inputModel) UpdateMouse(msg tea.MouseMsg) (InputModel, tea.Cmd, bool) {
 			key = tea.KeyDown
 		}
 		updated, cmd := m.UpdateComponent(tea.KeyMsg{Type: key})
-		return updated, cmd, true
+		// Rows slid under a stationary pointer: re-aim the highlight.
+		return updated.hoverAt(msg.Y), cmd, true
 	case tea.MouseButtonLeft:
 		if !item {
 			return m, nil, true
 		}
+		m.hovered = false
 		m.suggSelected = index
 		m.adjustSuggestionOffset()
 		updated, cmd := m.handleEnter()
@@ -533,6 +575,7 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		m.hovered = false
 		// Windows deferred Enter: if any input arrives before the idle timer
 		// fires, the Enter was not a lone submit (it was almost certainly a
 		// pasted newline). Turn it into a literal newline and continue.
@@ -969,6 +1012,8 @@ func (m inputModel) View() string {
 			name := OkStyle.Render(s.Name)
 			if i == m.suggSelected {
 				name = SelectedBg.Render(s.Name)
+			} else if m.hovered && i == m.hoverIdx {
+				name = HoverStyle.Render(s.Name)
 			}
 			b.WriteString(fmt.Sprintf("%s %s  %s\n",
 				DimStyle.Render("│"),

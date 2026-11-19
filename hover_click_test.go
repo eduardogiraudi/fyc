@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,6 +36,24 @@ func clickableModel(t *testing.T, height int) chatModel {
 	}
 	m.View()
 	return m
+}
+
+// pressEnter sends Enter the way the terminal would. Windows holds a lone Enter
+// for a few milliseconds to tell it from a pasted newline, so the idle tick has
+// to be delivered before the key has any effect.
+func pressEnter(t *testing.T, m chatModel) (chatModel, tea.Cmd) {
+	t.Helper()
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(chatModel)
+	if runtime.GOOS == "windows" && cmd != nil {
+		idle, ok := cmd().(ui.InputEnterIdleMsg)
+		if !ok {
+			t.Fatal("deferred Enter did not produce an idle tick")
+		}
+		next, cmd = m.Update(idle)
+		m = next.(chatModel)
+	}
+	return m, cmd
 }
 
 func press(x, y int) tea.MouseMsg {
@@ -293,9 +312,55 @@ func TestSlashSuggestionWheelDoesNotScrollTranscript(t *testing.T) {
 	if cmd != nil || m.transcript.offset != offset {
 		t.Fatal("the suggestion wheel scrolled the transcript")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = next.(chatModel)
+	m, _ = pressEnter(t, m)
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "/command-1") || strings.Contains(view, "/command-2") {
 		t.Fatalf("wheel did not move the suggestion selection:\n%s", view)
+	}
+}
+
+func TestSlashSuggestionHoverHighlightsTheRowUnderThePointer(t *testing.T) {
+	forceTrueColor(t)
+	m := slashMouseModel(t, 20)
+	plain := m.View()
+	_, y := modalCell(t, m, "/command-2")
+	next, _ := m.Update(motion(2, y))
+	m = next.(chatModel)
+	hovered := m.View()
+	if hovered == plain {
+		t.Fatal("hovering a suggestion did not change the frame")
+	}
+	if ansi.Strip(hovered) != ansi.Strip(plain) {
+		t.Fatal("hover must only change colours, never the text or its columns")
+	}
+
+	// Leaving the popup drops the highlight.
+	next, _ = m.Update(motion(2, 0))
+	m = next.(chatModel)
+	if m.View() != plain {
+		t.Fatal("the highlight stayed after the pointer left the suggestions")
+	}
+}
+
+func TestHistorySearchHoverHighlightsTheRowUnderThePointer(t *testing.T) {
+	forceTrueColor(t)
+	m := newChatModel(nil, nil, []string{"match 0", "match 1", "match 2"}, nil)
+	m.width, m.height = 60, 12
+	m.statsProviderInfo = ""
+	m.enableAltScreen(nil)
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = next.(chatModel)
+	plain := m.View()
+	_, y := modalCell(t, m, "match 0")
+	next, _ = m.Update(motion(2, y))
+	m = next.(chatModel)
+	if m.View() == plain {
+		t.Fatal("hovering a history row did not change the frame")
+	}
+
+	// A key press means the pointer no longer says where the user is aiming.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(chatModel)
+	if m.input.HoverActive() {
+		t.Fatal("a key press must clear the popup hover")
 	}
 }

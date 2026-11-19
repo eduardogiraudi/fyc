@@ -201,6 +201,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// All-motion reporting delivers pointer moves with no button pressed:
 		// that is what lets the status-bar parts behave like buttons.
 		if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
+			if m.hit != nil && m.hit.inputOK {
+				local := msg
+				local.Y -= m.hit.inputRow
+				m.input = m.input.UpdateHover(local)
+			} else {
+				m.input = m.input.ClearHover()
+			}
 			m.hover = m.hitAt(msg.X, msg.Y)
 			return m, nil
 		}

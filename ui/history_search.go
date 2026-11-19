@@ -171,11 +171,12 @@ func (m inputModel) updateHistorySearchMouse(msg tea.MouseMsg) (InputModel, tea.
 			key = tea.KeyDown
 		}
 		updated, cmd := m.updateHistorySearch(tea.KeyMsg{Type: key})
-		return updated, cmd, true
+		return updated.hoverAt(msg.Y), cmd, true
 	case tea.MouseButtonLeft:
 		if !item {
 			return m, nil, true
 		}
+		m.hovered = false
 		m.searchIdx = index
 		updated, cmd := m.updateHistorySearch(tea.KeyMsg{Type: tea.KeyEnter})
 		return updated, cmd, true
@@ -220,6 +221,8 @@ func (m inputModel) historySearchView() string {
 			if i == m.searchIdx {
 				text = "› " + strings.Join(strings.Fields(m.history[i]), " ")
 				style = SelectedBg
+			} else if m.hovered && i == m.hoverIdx {
+				style = HoverStyle
 			}
 			b.WriteString(style.Render(ansi.Truncate(text, width, "…")) + "\n")
 		}

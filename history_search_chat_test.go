@@ -99,8 +99,7 @@ func TestChatHistorySearchMouseUsesDrawnRows(t *testing.T) {
 		if m.transcript.selActive || m.transcript.SelectionText() != "" {
 			t.Fatal("history click started a transcript selection")
 		}
-		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		m = next.(chatModel)
+		m, cmd = pressEnter(t, m)
 		if cmd == nil {
 			t.Fatalf("recalled entry did not reach the input at height %d", height)
 		}
