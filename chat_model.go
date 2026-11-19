@@ -94,13 +94,27 @@ func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []s
 // blocks printed before the program started (banner, tips, start-up notices),
 // which the alternate screen would otherwise hide.
 func (m *chatModel) enableAltScreen(seed []string, header ...func(int) string) {
+	blocks := make([]ui.SeedBlock, 0, len(seed))
+	for _, text := range seed {
+		blocks = append(blocks, ui.SeedBlock{Text: text})
+	}
+	m.enableAltScreenBlocks(blocks, header...)
+}
+
+// enableAltScreenBlocks is enableAltScreen for a seed that mixes rendered text
+// with expandable tool results (the replayed conversation).
+func (m *chatModel) enableAltScreenBlocks(seed []ui.SeedBlock, header ...func(int) string) {
 	m.transcript = &transcriptState{}
 	m.hit = &frameHit{}
 	for i, block := range seed {
-		if i == 0 && len(header) > 0 {
+		switch {
+		case i == 0 && len(header) > 0:
 			m.transcript.AppendRendered(header[0], m.width)
-		} else {
-			m.transcript.AppendRendered(func(width int) string { return ui.WrapBlock(block, width) }, m.width)
+		case block.Tool != nil:
+			m.transcript.AppendTool(block.Tool)
+		default:
+			text := block.Text
+			m.transcript.AppendRendered(func(width int) string { return ui.WrapBlock(text, width) }, m.width)
 		}
 	}
 }
@@ -209,6 +223,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input = m.input.ClearHover()
 			}
 			m.hover = m.hitAt(msg.X, msg.Y)
+			// The expandable rows of the transcript are buttons too: hover is
+			// what tells the user the marker can be clicked.
+			if m.hover == hoverNone {
+				m.transcript.HoverAt(msg.Y)
+			} else {
+				m.transcript.ClearHover()
+			}
 			return m, nil
 		}
 		switch msg.Button {
@@ -226,6 +247,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleAutoModeCmd()
 			case hoverScrollBack:
 				m.transcript.Follow()
+				m.hover = hoverNone
+				return m, nil
+			}
+			// A press on an expandable row is a button press, not the start of
+			// a text selection: the toggle redraws the block in place.
+			if m.transcript.ToggleAt(msg.Y) {
 				m.hover = hoverNone
 				return m, nil
 			}
@@ -376,7 +403,27 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.finishReasoningCmd())
 		m.clearTransient()
 		m.subagentPanel = nil
+		if m.transcript != nil {
+			// The transcript keeps the whole result: the marker row is a button
+			// that expands what the inline REPL only truncates.
+			m.transcript.AppendTool(ui.NewToolOutput(msg.Label, msg.Result, msg.Detail))
+			break
+		}
 		cmds = append(cmds, m.printCmd(ui.FormatToolOutput(msg.Label, msg.Result, m.width, ui.ToolOutputRows)))
+
+	case ui.StreamToolBlockMsg:
+		// An already-formatted tool result (session replay): the transcript
+		// keeps it expandable, the inline REPL prints it once.
+		cmds = append(cmds, m.flushTextCmd())
+		cmds = append(cmds, m.finishReasoningCmd())
+		if msg.Tool == nil {
+			break
+		}
+		if m.transcript != nil {
+			m.transcript.AppendTool(msg.Tool)
+			break
+		}
+		cmds = append(cmds, m.printCmd(ui.FormatToolOutput(msg.Tool.Label, msg.Tool.Result, m.width, ui.ToolOutputRows)))
 
 	case ui.StreamInterruptMsg:
 		cmds = append(cmds, m.flushTextCmd())
@@ -774,6 +821,7 @@ func isChatStreamMsg(msg tea.Msg) bool {
 	case ui.StreamResetMsg, ui.StreamTextMsg, ui.StreamReasoningMsg, ui.ReasoningTickMsg,
 		ui.StreamSpinnerStartMsg, ui.StreamSpinnerStopMsg, ui.SpinnerTickMsg,
 		ui.StreamDiffCraftMsg, ui.StreamDiffCraftDoneMsg, ui.StreamToolOutputMsg,
+		ui.StreamToolBlockMsg,
 		ui.StreamInterruptMsg, ui.StreamNewlineMsg, ui.StreamStatsMsg,
 		ui.StreamHookLineMsg, ui.StreamFinalizeMsg, ui.StreamPauseMsg,
 		ui.StreamPrintMsg, ui.StreamResumeMsg, ui.StreamSubagentPanelMsg,
@@ -884,6 +932,9 @@ func (m *chatModel) dropStaleHover() {
 	if m.hover == hoverScrollBack && !m.transcript.ScrolledUp() {
 		m.hover = hoverNone
 	}
+	// A press or a wheel turn means the pointer's hover is stale: the rows it
+	// pointed at may not be there any more.
+	m.transcript.ClearHover()
 }
 
 // toggleAutoModeCmd flips auto mode, the same session switch ctrl+o performs.

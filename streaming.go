@@ -301,6 +301,10 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 		}
 		if hasStructured {
 			structured.ToolCallFinished(callID, tc.Function.Name, res.Text)
+		} else if ds, ok := sink.(types.ToolDetailSink); ok && res.Detail != "" {
+			// The detail is human-facing only (the changed lines of a patch):
+			// a sink that can show it gets it, the others keep the plain text.
+			ds.WriteToolOutputDetail(outputLabel, res.Text, res.Detail)
 		} else {
 			sink.WriteToolOutput(outputLabel, res.Text)
 		}
@@ -308,6 +312,8 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 			Role:    "tool",
 			Name:    tc.Function.Name,
 			Content: res.Text,
+			// Kept for the UI (session replay expands it); never sent to a model.
+			ToolDetail: res.Detail,
 		}
 		if len(res.Images) > 0 {
 			msg.Images = res.Images

@@ -391,24 +391,41 @@ func replaySessionHistory(s *ChatSession) {
 			pending = append(pending, m.ToolCalls...)
 		case "tool":
 			call, _ := takePendingCall(&pending, m)
-			writeSessionBlock(s, replayToolResult(m, call, width))
+			writeSessionToolResult(s, m, call, width)
 		}
 	}
 	flushPending()
 }
 
-// replayToolResult renders a stored tool result exactly like the live TUI: the
-// done/failed label followed by the result, truncated to ui.ToolOutputRows.
-func replayToolResult(message types.Message, call types.ToolCall, width int) string {
+// toolBlockPrinter is implemented by sinks that keep a tool result expandable
+// instead of printing it once: a resumed chat then shows the same clickable
+// marker the live one had.
+type toolBlockPrinter interface{ PrintToolBlock(*ui.ToolOutput) }
+
+// writeSessionToolResult replays a stored tool result exactly like the live TUI:
+// an expandable block when the sink can keep it, the rendered text otherwise.
+func writeSessionToolResult(s *ChatSession, message types.Message, call types.ToolCall, width int) {
 	name := call.Function.Name
 	if name == "" {
 		name = message.Name
 	}
 	label := tools.DescribeTool(name, call.Function.Arguments)
+	done := label.Done
 	if types.ToolResultFailed(message.Content) {
-		return ui.FormatToolOutput(label.Failed, message.Content, width, ui.ToolOutputRows)
+		done = label.Failed
 	}
-	return ui.FormatToolOutput(label.Done, message.Content, width, ui.ToolOutputRows)
+	tool := ui.NewToolOutput(done, message.Content, message.ToolDetail)
+	switch sink := s.Sink.(type) {
+	case toolBlockPrinter:
+		sink.PrintToolBlock(tool)
+		return
+	case nil:
+		// Start-up replay runs before the chat has a sink: the block still goes
+		// to the alt-screen seed, so the resumed chat keeps the marker.
+		ui.PrintToolBlock(tool)
+		return
+	}
+	writeSessionBlock(s, ui.FormatToolOutput(done, message.Content, width, ui.ToolOutputRows))
 }
 
 // takePendingCall pops the call a tool message answers: by call id when the

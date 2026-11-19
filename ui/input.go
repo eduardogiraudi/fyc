@@ -89,6 +89,10 @@ type inputModel struct {
 	// turned into a newline rather than a submit.
 	pendingEnter bool
 	enterSeq     uint64
+
+	// leak drops mouse reports that bubbletea split across stdin reads (see
+	// mouseLeakFilter).
+	leak mouseLeakFilter
 }
 
 func NewInputModel(history []string, sp SuggestionProvider) InputModel {
@@ -575,6 +579,12 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		leak, filtered, drop := m.leak.filter(msg, time.Now())
+		m.leak = leak
+		if drop {
+			return m, nil
+		}
+		msg = filtered
 		m.hovered = false
 		// Windows deferred Enter: if any input arrives before the idle timer
 		// fires, the Enter was not a lone submit (it was almost certainly a

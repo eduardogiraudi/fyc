@@ -131,10 +131,12 @@ func main() {
 	// program takes over the terminal: the start-up notices are seeded into the
 	// chat transcript instead (see emit).
 	altScreen := cfg.AltScreen
-	var altSeed []string
+	// altSeed keeps the seed order: text blocks and expandable tool results
+	// interleaved exactly as they were produced.
+	var altSeed []ui.SeedBlock
 	emit := func(block string) {
 		if altScreen {
-			altSeed = append(altSeed, block)
+			altSeed = append(altSeed, ui.SeedBlock{Text: block})
 			return
 		}
 		fmt.Println(block)
@@ -276,11 +278,10 @@ func main() {
 	}()
 	updateSystemPrompt(session)
 
-	// A resumed conversation is replayed here, before the chat program exists:
 	// in alt-screen mode those blocks have to be seeded into the transcript,
 	// because the alternate screen hides whatever stdout showed.
 	if altScreen {
-		ui.SetPreProgramBlockSink(func(block string) { altSeed = append(altSeed, block) })
+		ui.SetPreProgramBlockSink(func(block ui.SeedBlock) { altSeed = append(altSeed, block) })
 	}
 	dismissed := showChatPrompt(session)
 	ui.SetPreProgramBlockSink(nil)
@@ -305,7 +306,7 @@ func main() {
 	chat := newChatModel(session, chatSink, persistedHistory, buildSuggestionProvider(session))
 	opts := []tea.ProgramOption{tea.WithoutSignals()}
 	if altScreen {
-		chat.enableAltScreen(altSeed, func(width int) string {
+		chat.enableAltScreenBlocks(altSeed, func(width int) string {
 			return ui.StartupHeaderBlockAtWidth(cfg.CompactBanner, info, width)
 		})
 		// Mouse reporting is what turns a wheel turn into a MouseMsg: without

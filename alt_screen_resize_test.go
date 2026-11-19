@@ -148,7 +148,7 @@ func TestAltScreenResizeAlsoReflowsRetrySnapshot(t *testing.T) {
 
 func TestSessionStartupSeedKeepsLongPrompt(t *testing.T) {
 	var seed []string
-	ui.SetPreProgramBlockSink(func(block string) { seed = append(seed, block) })
+	ui.SetPreProgramBlockSink(func(block ui.SeedBlock) { seed = append(seed, block.Text) })
 	defer ui.SetPreProgramBlockSink(nil)
 	input := strings.Repeat("input", 100)
 	writeSessionBlock(&ChatSession{}, ui.RenderSubmittedPrompt(input))

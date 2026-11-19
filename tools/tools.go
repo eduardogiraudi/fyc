@@ -96,7 +96,7 @@ func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *Ig
 		return textResult(executeGetAnchorsTool(args, restrictedRoot, globalIgnore))
 
 	case "replace_anchors":
-		return textResult(executeReplaceAnchorsTool(ctx, args, restrictedRoot, globalIgnore))
+		return executeReplaceAnchorsTool(ctx, args, restrictedRoot, globalIgnore)
 	case "write":
 		return textResult(executeWriteTool(ctx, args, restrictedRoot, globalIgnore))
 

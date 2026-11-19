@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math/bits"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -734,6 +735,60 @@ func editOps(r editRange, oldLines, newLines []string) []diffOp {
 		ops = append(ops, diffOp{diffEqual, l})
 	}
 	return ops
+}
+
+// editDetailContext is how many unchanged lines surround a change in the UI
+// detail, and editDetailMaxRows caps what a huge patch may print.
+const (
+	editDetailContext = 2
+	editDetailMaxRows = 24
+)
+
+// editDetail renders the changed lines of a patch with their line number and a
+// little surrounding context: " 12 context", "-13 removed", "+13 added" (the
+// marker first, so the UI can colour a row by its first byte). It is
+// human-facing only: the model gets the anchors, never this.
+func editDetail(ops []diffOp) string {
+	keep := make([]bool, len(ops))
+	for i, op := range ops {
+		if op.opType == diffEqual {
+			continue
+		}
+		for j := max(0, i-editDetailContext); j <= min(len(ops)-1, i+editDetailContext); j++ {
+			keep[j] = true
+		}
+	}
+	numberWidth := len(strconv.Itoa(len(ops)))
+	var out []string
+	gap := false
+	oldLine, newLine := 1, 1
+	for i, op := range ops {
+		marker, number := byte(' '), newLine
+		switch op.opType {
+		case diffDelete:
+			marker, number = '-', oldLine
+			oldLine++
+		case diffInsert:
+			marker, number = '+', newLine
+			newLine++
+		default:
+			oldLine++
+			newLine++
+		}
+		if !keep[i] {
+			gap = len(out) > 0
+			continue
+		}
+		if gap {
+			out = append(out, "⋯")
+			gap = false
+		}
+		out = append(out, fmt.Sprintf("%c%*d %s", marker, numberWidth, number, op.text))
+	}
+	if len(out) > editDetailMaxRows {
+		out = append(out[:editDetailMaxRows], fmt.Sprintf("… %d more changed lines", len(out)-editDetailMaxRows))
+	}
+	return strings.Join(out, "\n")
 }
 
 // CommitEdit applies newLines to the file state and returns:

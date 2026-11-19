@@ -96,6 +96,11 @@ type Message struct {
 	// Images holds optional binary attachments (base64) for this message.
 	// Used by tool results that produce screenshots (computer use).
 	Images []ImageAttachment `json:"images,omitempty"`
+	// ToolDetail is the human-facing note shown with this tool result (the
+	// changed lines of an anchored edit). It is UI-only: providers build their
+	// requests from Content/Name/ToolCallID and never read it, so it can be
+	// persisted without ever reaching a model.
+	ToolDetail string `json:"tool_detail,omitempty"`
 }
 
 // ImageAttachment is a base64-encoded image attached to a message (e.g. a
@@ -116,6 +121,10 @@ type ImageAttachment struct {
 type ToolResult struct {
 	Text   string
 	Images []ImageAttachment
+	// Detail is a human-facing explanation of the result (the changed lines of
+	// an anchored edit). It is never sent to the model: the loop keeps it on the
+	// tool message for the UI only.
+	Detail string
 }
 
 // ToolResultFailed reports whether a tool's textual result denotes a failure.
@@ -346,6 +355,13 @@ type ToolEventSink interface {
 // arguments are still streaming in, so it may be a generic "patching file".
 type DiffCraftSink interface {
 	WriteDiffCraftFor(label string, add, del int)
+}
+
+// ToolDetailSink is an optional extension of OutputSink for sinks that can show
+// the human-facing detail of a tool result (ToolResult.Detail) next to its text.
+// Sinks that do not implement it keep the plain WriteToolOutput.
+type ToolDetailSink interface {
+	WriteToolOutputDetail(label, res, detail string)
 }
 
 // StatusLineSink is an optional extension of OutputSink for sinks that can

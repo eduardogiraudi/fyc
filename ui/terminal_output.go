@@ -3,10 +3,20 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// SeedBlock is one entry of the alt-screen transcript seed, in the order the
+// blocks were produced: text already rendered, or a tool result the chat keeps
+// expandable (so a resumed chat shows the same clickable marker as the live
+// one).
+type SeedBlock struct {
+	Text string
+	Tool *ToolOutput
+}
 
 // preProgramBlock divertes rendered blocks printed before the chat program
 // exists (session replay on start-up) away from stdout. The alternate screen is
@@ -14,12 +24,12 @@ import (
 // its transcript instead.
 var preProgramBlock struct {
 	mu sync.Mutex
-	fn func(string)
+	fn func(SeedBlock)
 }
 
 // SetPreProgramBlockSink installs (or clears, with nil) the receiver of blocks
 // rendered before a chat program is attached.
-func SetPreProgramBlockSink(fn func(string)) {
+func SetPreProgramBlockSink(fn func(SeedBlock)) {
 	preProgramBlock.mu.Lock()
 	preProgramBlock.fn = fn
 	preProgramBlock.mu.Unlock()
@@ -29,26 +39,40 @@ func SetPreProgramBlockSink(fn func(string)) {
 // attached: into the alt-screen seed when one is registered, into stdout
 // otherwise.
 func PrintRenderedBlock(text string) {
-	printPreProgramBlock(text, false)
+	printPreProgramBlock(SeedBlock{Text: text}, false)
 }
 
 // PrintReplayBlock keeps the full source in the seed but clamps plain stdout.
 func PrintReplayBlock(text string) {
-	printPreProgramBlock(text, true)
+	printPreProgramBlock(SeedBlock{Text: text}, true)
 }
 
-func printPreProgramBlock(text string, clamp bool) {
-	if text == "" {
+// PrintToolBlock writes an expandable tool result when no program is attached:
+// into the alt-screen seed when one is registered, into stdout as its collapsed
+// rendering otherwise (there is nothing to click in a scrollback).
+func PrintToolBlock(tool *ToolOutput) {
+	if tool == nil {
+		return
+	}
+	printPreProgramBlock(SeedBlock{Tool: tool}, true)
+}
+
+func printPreProgramBlock(block SeedBlock, clamp bool) {
+	text := block.Text
+	if text == "" && block.Tool == nil {
 		return
 	}
 	preProgramBlock.mu.Lock()
 	fn := preProgramBlock.fn
 	preProgramBlock.mu.Unlock()
 	if fn != nil {
-		fn(text)
+		fn(block)
 		return
 	}
-	if clamp {
+	if block.Tool != nil {
+		rows, _ := block.Tool.Rows(TerminalWidth())
+		text = strings.Join(rows, "\n")
+	} else if clamp {
 		text = ClampBlock(text, TerminalWidth())
 	}
 	fmt.Println(text)
@@ -188,11 +212,31 @@ func (s *TerminalOutputSink) WriteStatusLine(text string) {
 	s.send(StreamHookLineMsg{Text: text})
 }
 func (s *TerminalOutputSink) WriteToolOutput(label, res string) {
-	if s.send(StreamToolOutputMsg{Label: label, Result: res}) {
+	s.WriteToolOutputDetail(label, res, "")
+}
+
+// WriteToolOutputDetail implements types.ToolDetailSink: detail is the
+// human-facing part of the result (e.g. the changed lines of an anchored edit)
+// and never reaches the model.
+func (s *TerminalOutputSink) WriteToolOutputDetail(label, res, detail string) {
+	if s.send(StreamToolOutputMsg{Label: label, Result: res, Detail: detail}) {
 		return
 	}
 	s.streamRenderer.Finalize()
 	PrintToolOutput(label, res)
+}
+
+// PrintToolBlock prints an expandable tool result (see ToolOutput): the
+// alt-screen transcript keeps the marker clickable, and before the program
+// exists the block waits in the seed so a resumed chat shows it too.
+func (s *TerminalOutputSink) PrintToolBlock(tool *ToolOutput) {
+	if tool == nil {
+		return
+	}
+	if s.send(StreamToolBlockMsg{Tool: tool}) {
+		return
+	}
+	PrintToolBlock(tool)
 }
 
 // PrintBlock prints an already-rendered block verbatim in the scrollback (see

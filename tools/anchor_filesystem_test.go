@@ -60,7 +60,7 @@ func readAnchorToken(t *testing.T, root string, line int) string {
 func patchAnchorFile(ctx context.Context, root, anchor, replacement string) string {
 	return executeReplaceAnchorsTool(ctx, map[string]any{
 		"path": "file.txt", "start_anchor": anchor, "end_anchor": anchor, "replacement": replacement,
-	}, root, nil)
+	}, root, nil).Text
 }
 
 func assertAnchorFile(t *testing.T, path, want string) {
@@ -178,7 +178,7 @@ func TestReplaceAnchorsStripsCopiedPrefixes(t *testing.T) {
 	res := executeReplaceAnchorsTool(context.Background(), map[string]any{
 		"path": "file.txt", "start_anchor": first, "end_anchor": target,
 		"replacement": first + "§first\n§ added\nnew",
-	}, root, nil)
+	}, root, nil).Text
 	if !strings.HasPrefix(res, "updated") {
 		t.Fatalf("patch failed: %s", res)
 	}

@@ -10,7 +10,14 @@ type StreamDiffCraftMsg struct {
 	Add, Del int
 }
 type StreamDiffCraftDoneMsg struct{}
-type StreamToolOutputMsg struct{ Label, Result string }
+
+// StreamToolOutputMsg carries a finished tool call. Detail is the human-facing
+// part of the result (never sent to the model) and may be empty.
+type StreamToolOutputMsg struct{ Label, Result, Detail string }
+
+// StreamToolBlockMsg carries a tool result the alt-screen chat keeps expandable
+// in its transcript instead of printing once (see ToolOutput).
+type StreamToolBlockMsg struct{ Tool *ToolOutput }
 type StreamInterruptMsg struct{}
 type StreamNewlineMsg struct{}
 

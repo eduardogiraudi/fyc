@@ -41,7 +41,7 @@ func TestHostedSelectorKeepsCursorVisible(t *testing.T) {
 // alternate screen would hide anything printed before it.
 func TestPrintRenderedBlockGoesToTheRegisteredSink(t *testing.T) {
 	var got []string
-	SetPreProgramBlockSink(func(block string) { got = append(got, block) })
+	SetPreProgramBlockSink(func(block SeedBlock) { got = append(got, block.Text) })
 	defer SetPreProgramBlockSink(nil)
 
 	sink := &TerminalOutputSink{}

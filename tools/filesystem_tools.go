@@ -3,13 +3,16 @@ package tools
 import (
 	"context"
 	"fmt"
-	"github.com/charlievieth/fastwalk"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"fuckyourcli/types"
+
+	"github.com/charlievieth/fastwalk"
 )
 
 // executeLSTool handles the "ls" case.
@@ -490,8 +493,16 @@ func executeGetAnchorsTool(args map[string]any, restrictedRoot string, globalIgn
 	return out
 }
 
-// executeReplaceAnchorsTool handles the "replace_anchors" case.
-func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
+// executeReplaceAnchorsTool handles the "replace_anchors" case. The result
+// carries a human-facing detail (the changed lines with a little context) that
+// the UI can show on demand; it never reaches the model.
+func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) types.ToolResult {
+	var detail string
+	text := executeReplaceAnchorsEdit(ctx, args, restrictedRoot, globalIgnore, &detail)
+	return types.ToolResult{Text: text, Detail: detail}
+}
+
+func executeReplaceAnchorsEdit(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager, detail *string) string {
 	path, ok := args["path"].(string)
 	if !ok {
 		return "error: path argument required"
@@ -600,8 +611,9 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 	}
 
 	_, insertedOnly := globalAnchorState.CommitEdit(absPath, edited, oldLines, newLines)
+	ops := editOps(edited, oldLines, newLines)
 	added, removed := 0, 0
-	for _, op := range editOps(edited, oldLines, newLines) {
+	for _, op := range ops {
 		switch op.opType {
 		case diffInsert:
 			added++
@@ -609,6 +621,7 @@ func executeReplaceAnchorsTool(ctx context.Context, args map[string]any, restric
 			removed++
 		}
 	}
+	*detail = editDetail(ops)
 	summary := fmt.Sprintf("updated (+%d -%d lines)", added, removed)
 	if insertedOnly == "" {
 		return summary + "\nno new anchors (lines deleted)"

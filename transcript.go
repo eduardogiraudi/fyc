@@ -22,6 +22,19 @@ const mouseScrollRows = 3
 type transcriptBlock struct {
 	rows   []string
 	render func(int) string
+	// expand is set on a block the alt-screen chat expands in place (a tool
+	// result): controls are the rows of rows a click acts on.
+	expand   expandable
+	controls []ui.BlockControl
+}
+
+// expandable is a transcript block whose rows change on a click or on hover.
+// Toggle and SetHover report whether anything changed, so the transcript knows
+// to re-render the block.
+type expandable interface {
+	Rows(width int) ([]string, []ui.BlockControl)
+	Toggle(id int) bool
+	SetHover(id int) bool
 }
 
 // transcriptState holds the completed output of the alt-screen chat: rendered
@@ -49,6 +62,11 @@ type transcriptState struct {
 	selActive bool
 	selAnchor cellPos
 	selCursor cellPos
+	// hoverBlock/hoverControl are the control under the pointer: the block
+	// repaints that row white, so only it knows what is highlighted.
+	hoverActive  bool
+	hoverBlock   int
+	hoverControl int
 }
 
 // cellPos is a position in the transcript: which row, and which column of it.
@@ -83,6 +101,29 @@ func (t *transcriptState) appendBlock(block string, render func(int) string) {
 	t.clamp()
 }
 
+// AppendTool adds a tool result the alt-screen chat expands in place: its
+// marker rows are clickable controls, not decoration.
+func (t *transcriptState) AppendTool(tool *ui.ToolOutput) {
+	if tool == nil {
+		return
+	}
+	rows, controls := tool.Rows(t.width)
+	t.appendExpandable(rows, controls, tool)
+}
+
+func (t *transcriptState) appendExpandable(rows []string, controls []ui.BlockControl, e expandable) {
+	if len(rows) == 0 {
+		return
+	}
+	if t.offset > 0 {
+		t.offset += len(rows)
+	}
+	t.blocks = append(t.blocks, transcriptBlock{rows: rows, expand: e, controls: controls})
+	t.lines = append(t.lines, rows...)
+	t.trim()
+	t.clamp()
+}
+
 func (t *transcriptState) trim() {
 	drop := len(t.lines) - transcriptMaxLines
 	if drop <= 0 {
@@ -105,6 +146,7 @@ func (t *transcriptState) trim() {
 		// A partially evicted block becomes static: never resurrect its head.
 		t.blocks[0] = transcriptBlock{rows: append([]string(nil), t.blocks[0].rows[drop:]...)}
 	}
+	t.resetHover()
 }
 
 func (t *transcriptState) Resize(width int) {
@@ -112,20 +154,25 @@ func (t *transcriptState) Resize(width int) {
 		return
 	}
 	t.width = width
+	t.resetHover()
 	start := max(0, len(t.lines)-t.height-t.offset)
 	oldRow, newStart := 0, 0
 	lines := make([]string, 0, len(t.lines))
 	blocks := append([]transcriptBlock(nil), t.blocks...)
 	for i, block := range blocks {
 		rows := block.rows
-		if block.render != nil {
+		switch {
+		case block.expand != nil:
+			rows, block.controls = block.expand.Rows(width)
+		case block.render != nil:
 			rows = strings.Split(strings.TrimRight(block.render(width), "\n"), "\n")
 		}
 		if start >= oldRow && start < oldRow+len(block.rows) {
 			newStart = len(lines) + min(start-oldRow, len(rows)-1)
 		}
 		oldRow += len(block.rows)
-		blocks[i].rows = rows
+		block.rows = rows
+		blocks[i] = block
 		lines = append(lines, rows...)
 	}
 	t.blocks, t.lines = blocks, lines
@@ -225,6 +272,155 @@ func (t *transcriptState) clamp() {
 	if t.offset < 0 {
 		t.offset = 0
 	}
+}
+
+// rowAt maps a screen row of the transcript region (0 = the first row drawn) to
+// a transcript row, or -1 when that row is outside what the transcript drew.
+func (t *transcriptState) rowAt(screenRow int) int {
+	if screenRow < 0 || screenRow >= t.height {
+		return -1
+	}
+	row := t.viewStart + screenRow
+	if row < 0 || row >= len(t.lines) {
+		return -1
+	}
+	return row
+}
+
+// ToggleAt flips the expandable control drawn on screen row y. It reports
+// whether that row was a control: a click there is a button press, never the
+// start of a text selection.
+func (t *transcriptState) ToggleAt(y int) bool {
+	row := t.rowAt(y)
+	if row < 0 {
+		return false
+	}
+	idx, offset, ok := t.blockAt(row)
+	if !ok || t.blocks[idx].expand == nil {
+		return false
+	}
+	id := -1
+	for _, c := range t.blocks[idx].controls {
+		if c.Row == offset {
+			id = c.ID
+			break
+		}
+	}
+	if id < 0 {
+		return false
+	}
+	if t.blocks[idx].expand.Toggle(id) {
+		t.rerenderBlock(idx)
+	}
+	return true
+}
+
+// HoverAt highlights the control under the pointer and drops the highlight when
+// the pointer is anywhere else on the transcript.
+func (t *transcriptState) HoverAt(y int) {
+	idx, id, ok := t.controlUnder(y)
+	if !ok {
+		t.ClearHover()
+		return
+	}
+	if t.hoverActive && t.hoverBlock == idx && t.hoverControl == id {
+		return
+	}
+	t.ClearHover()
+	t.hoverActive, t.hoverBlock, t.hoverControl = true, idx, id
+	if t.blocks[idx].expand.SetHover(id) {
+		t.redrawBlock(idx)
+	}
+}
+
+// ClearHover drops the control highlight.
+func (t *transcriptState) ClearHover() {
+	if !t.hoverActive {
+		return
+	}
+	idx := t.hoverBlock
+	t.hoverActive = false
+	if idx >= 0 && idx < len(t.blocks) && t.blocks[idx].expand != nil && t.blocks[idx].expand.SetHover(-1) {
+		t.redrawBlock(idx)
+	}
+}
+
+// resetHover forgets the highlight without redrawing: the block is about to be
+// re-rendered from scratch anyway.
+func (t *transcriptState) resetHover() {
+	if t.hoverActive && t.hoverBlock >= 0 && t.hoverBlock < len(t.blocks) && t.blocks[t.hoverBlock].expand != nil {
+		t.blocks[t.hoverBlock].expand.SetHover(-1)
+	}
+	t.hoverActive = false
+	t.hoverBlock, t.hoverControl = 0, 0
+}
+
+// controlUnder maps a screen row of the transcript region to the block and the
+// control drawn there.
+func (t *transcriptState) controlUnder(y int) (int, int, bool) {
+	row := t.rowAt(y)
+	if row < 0 {
+		return 0, 0, false
+	}
+	idx, offset, ok := t.blockAt(row)
+	if !ok || t.blocks[idx].expand == nil {
+		return 0, 0, false
+	}
+	for _, c := range t.blocks[idx].controls {
+		if c.Row == offset {
+			return idx, c.ID, true
+		}
+	}
+	return 0, 0, false
+}
+
+// blockAt locates the block that owns transcript row and the row's offset in it.
+func (t *transcriptState) blockAt(row int) (int, int, bool) {
+	start := 0
+	for i := range t.blocks {
+		n := len(t.blocks[i].rows)
+		if row >= start && row < start+n {
+			return i, row - start, true
+		}
+		start += n
+	}
+	return 0, 0, false
+}
+
+// redrawBlock re-renders block idx in place and returns how many rows it gained
+// (negative when it lost some).
+func (t *transcriptState) redrawBlock(idx int) int {
+	block := &t.blocks[idx]
+	start := 0
+	for i := 0; i < idx; i++ {
+		start += len(t.blocks[i].rows)
+	}
+	old := len(block.rows)
+	rows, controls := block.expand.Rows(t.width)
+	block.rows, block.controls = rows, controls
+
+	lines := make([]string, 0, len(t.lines)+len(rows)-old)
+	lines = append(lines, t.lines[:start]...)
+	lines = append(lines, rows...)
+	lines = append(lines, t.lines[start+old:]...)
+	t.lines = lines
+	return len(rows) - old
+}
+
+// rerenderBlock redraws block idx after its expandable part changed, keeping
+// the reader's window anchored on what it was showing.
+func (t *transcriptState) rerenderBlock(idx int) {
+	delta := t.redrawBlock(idx)
+	t.SelectionClear()
+	t.resetHover()
+	// A reader who was scrolled up keeps the row they were looking at: the
+	// revealed rows land where the clicked control was. A reader following the
+	// live output keeps following it, so the expansion shows at the bottom.
+	if delta != 0 && t.offset > 0 {
+		t.offset = max(0, len(t.lines)-t.height-t.viewStart)
+	}
+	t.trim()
+	t.clamp()
 }
 
 // SelectionStart begins a drag selection at a screen cell: y is the row of the
