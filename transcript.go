@@ -290,7 +290,7 @@ func (t *transcriptState) rowAt(screenRow int) int {
 // ToggleAt flips the expandable control drawn on screen row y. It reports
 // whether that row was a control: a click there is a button press, never the
 // start of a text selection.
-func (t *transcriptState) ToggleAt(y int) bool {
+func (t *transcriptState) ToggleAt(x, y int) bool {
 	row := t.rowAt(y)
 	if row < 0 {
 		return false
@@ -301,7 +301,7 @@ func (t *transcriptState) ToggleAt(y int) bool {
 	}
 	id := -1
 	for _, c := range t.blocks[idx].controls {
-		if c.Row == offset {
+		if c.Row == offset && x >= 0 && x < c.Width {
 			id = c.ID
 			break
 		}
@@ -316,9 +316,10 @@ func (t *transcriptState) ToggleAt(y int) bool {
 }
 
 // HoverAt highlights the control under the pointer and drops the highlight when
-// the pointer is anywhere else on the transcript.
-func (t *transcriptState) HoverAt(y int) {
-	idx, id, ok := t.controlUnder(y)
+// the pointer is anywhere else on the transcript, including on the empty cells
+// to the right of a control row.
+func (t *transcriptState) HoverAt(x, y int) {
+	idx, id, ok := t.controlUnder(x, y)
 	if !ok {
 		t.ClearHover()
 		return
@@ -357,7 +358,7 @@ func (t *transcriptState) resetHover() {
 
 // controlUnder maps a screen row of the transcript region to the block and the
 // control drawn there.
-func (t *transcriptState) controlUnder(y int) (int, int, bool) {
+func (t *transcriptState) controlUnder(x, y int) (int, int, bool) {
 	row := t.rowAt(y)
 	if row < 0 {
 		return 0, 0, false
@@ -367,7 +368,7 @@ func (t *transcriptState) controlUnder(y int) (int, int, bool) {
 		return 0, 0, false
 	}
 	for _, c := range t.blocks[idx].controls {
-		if c.Row == offset {
+		if c.Row == offset && x >= 0 && x < c.Width {
 			return idx, c.ID, true
 		}
 	}

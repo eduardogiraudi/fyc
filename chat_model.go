@@ -226,7 +226,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The expandable rows of the transcript are buttons too: hover is
 			// what tells the user the marker can be clicked.
 			if m.hover == hoverNone {
-				m.transcript.HoverAt(msg.Y)
+				m.transcript.HoverAt(msg.X, msg.Y)
 			} else {
 				m.transcript.ClearHover()
 			}
@@ -252,7 +252,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// A press on an expandable row is a button press, not the start of
 			// a text selection: the toggle redraws the block in place.
-			if m.transcript.ToggleAt(msg.Y) {
+			if m.transcript.ToggleAt(msg.X, msg.Y) {
 				m.hover = hoverNone
 				return m, nil
 			}

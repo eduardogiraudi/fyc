@@ -107,6 +107,42 @@ func TestHoverHighlightsTheExpandableRow(t *testing.T) {
 	}
 }
 
+// The control is only the cells the hover highlight paints: the empty part of
+// the row to its right neither highlights nor toggles.
+func TestControlRowIsOnlyActiveOverItsText(t *testing.T) {
+	m := expandableModel(t, 20)
+	marker := rowOf(m.View(), "more lines hidden")
+	if marker < 0 {
+		t.Fatalf("no marker in the frame:\n%s", m.View())
+	}
+	width := ansi.StringWidth(strings.Split(ansi.Strip(m.View()), "\n")[marker])
+	if width >= m.width-2 {
+		t.Fatalf("marker row spans the whole line (%d cols), nothing to test", width)
+	}
+
+	next, _ := m.Update(motion(width+2, marker))
+	m = next.(chatModel)
+	if m.transcript.hoverActive {
+		t.Fatal("the empty cells right of the marker are hovered")
+	}
+	next, _ = m.Update(press(width+2, marker))
+	m = next.(chatModel)
+	if strings.Contains(ansi.Strip(m.View()), "four") {
+		t.Fatal("a click right of the marker expanded the result")
+	}
+
+	next, _ = m.Update(motion(width-1, marker))
+	m = next.(chatModel)
+	if !m.transcript.hoverActive {
+		t.Fatal("the last cell of the marker is not hovered")
+	}
+	next, _ = m.Update(press(width-1, marker))
+	m = next.(chatModel)
+	if !strings.Contains(ansi.Strip(m.View()), "four") {
+		t.Fatal("a click on the marker text did not expand the result")
+	}
+}
+
 // A replayed tool result keeps the marker: the resumed chat shows the same
 // clickable row the live one had.
 func TestReplayedToolOutputStaysExpandable(t *testing.T) {

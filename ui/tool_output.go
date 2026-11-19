@@ -24,6 +24,9 @@ var anchorEditSummary = regexp.MustCompile(`^updated \(\+([0-9]+) -([0-9]+) line
 type BlockControl struct {
 	Row int
 	ID  int
+	// Width is how many columns, from the left edge, the drawn control spans:
+	// exactly the cells the hover highlight paints.
+	Width int
 }
 
 // Control ids of an expandable tool output. They are the actions a click on a
@@ -249,10 +252,12 @@ func (t *ToolOutput) Rows(width int) ([]string, []BlockControl) {
 			out = append(out, GrayStyle.Render(prefix+" "+row.text))
 		}
 	}
+	out = clampLines(out, width)
 	for i := range controls {
 		controls[i].Row += base
+		controls[i].Width = xansi.StringWidth(out[controls[i].Row])
 	}
-	return clampLines(out, width), controls
+	return out, controls
 }
 
 // toolResultRow renders one row of the result, colouring the added/removed
