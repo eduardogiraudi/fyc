@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"fuckyourcli/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -57,6 +58,55 @@ func TestChatHistorySearchBarSurvivesShortFrames(t *testing.T) {
 		m = updated.(chatModel)
 		if height >= 3 && !strings.Contains(ansi.Strip(m.View()), "› ") {
 			t.Fatal("selected result must remain visible in short frames")
+		}
+	}
+}
+
+func TestChatHistorySearchMouseUsesDrawnRows(t *testing.T) {
+	for _, height := range []int{4, 12} {
+		m := newChatModel(nil, nil, []string{"match 0", "match 1", "match 2", "match 3", "match 4", "match 5"}, nil)
+		m.width, m.height = 60, height
+		m.statsProviderInfo = ""
+		m.enableAltScreen(nil)
+		for i := 0; i < 20; i++ {
+			m.printCmd("previous output")
+		}
+		m.transcript.ScrollUp(4)
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		m = updated.(chatModel)
+		m.View()
+		x, y := modalCell(t, m, "match 5")
+		offset := m.transcript.offset
+		for i := 0; i < 4; i++ {
+			next, cmd := m.Update(tea.MouseMsg{
+				Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress, X: x, Y: y,
+			})
+			m = next.(chatModel)
+			if cmd != nil {
+				t.Fatalf("history wheel returned a command at height %d", height)
+			}
+			m.View()
+		}
+		if m.transcript.offset != offset {
+			t.Fatalf("history wheel scrolled the transcript at height %d", height)
+		}
+		x, y = modalCell(t, m, "match 1")
+		next, cmd := m.Update(press(x, y))
+		m = next.(chatModel)
+		if cmd != nil || m.input.HistorySearchActive() {
+			t.Fatalf("click did not recall the history entry at height %d", height)
+		}
+		if m.transcript.selActive || m.transcript.SelectionText() != "" {
+			t.Fatal("history click started a transcript selection")
+		}
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(chatModel)
+		if cmd == nil {
+			t.Fatalf("recalled entry did not reach the input at height %d", height)
+		}
+		msg, ok := cmd().(ui.InputSubmitMsg)
+		if !ok || msg.Value != "match 1" {
+			t.Fatalf("recalled entry = %#v at height %d, want match 1", msg, height)
 		}
 	}
 }

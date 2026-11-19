@@ -177,12 +177,26 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case tea.MouseMsg:
-		// Alt-screen mode owns its scrollback, so the wheel belongs to the
-		// transcript. Without mouse reporting the terminal would send arrow
+		// Alt-screen mode owns its scrollback, so the wheel normally belongs to
+		// the transcript. Without mouse reporting the terminal would send arrow
 		// keys instead and the input would walk its history. In the inline REPL
 		// the terminal keeps the mouse for itself on purpose.
 		if m.transcript == nil {
 			break
+		}
+		// The suggestion window gets first refusal: its coordinates are relative
+		// to the input origin recorded from the last actually drawn frame.
+		inputMouse := msg.Button == tea.MouseButtonLeft ||
+			msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
+		if msg.Action == tea.MouseActionPress && inputMouse && m.hit != nil && m.hit.inputOK {
+			local := msg
+			local.Y -= m.hit.inputRow
+			m.input = m.input.SetSubmitDisabled(m.generating)
+			updated, cmd, handled := m.input.UpdateMouse(local)
+			if handled {
+				m.input = updated
+				return m, cmd
+			}
 		}
 		// All-motion reporting delivers pointer moves with no button pressed:
 		// that is what lets the status-bar parts behave like buttons.
@@ -581,6 +595,14 @@ func (m chatModel) altScreenView() string {
 		}
 	}
 
+	// Like the status row, the input origin comes from the rows in this frame.
+	// It can become negative below when a long suggestion window is clipped.
+	inputInLive := -1
+	if m.modal == nil && len(parts) > 0 {
+		inputView := strings.TrimRight(parts[len(parts)-1], "\n")
+		inputInLive = len(liveRows) - (strings.Count(inputView, "\n") + 1)
+	}
+
 	height := m.height
 	if height <= 0 {
 		height = 24
@@ -621,6 +643,10 @@ func (m chatModel) altScreenView() string {
 	if statusInLive >= 0 {
 		statusRow = len(rows) - len(liveRows) + statusInLive
 	}
+	inputRow := -1
+	if inputInLive >= 0 {
+		inputRow = len(rows) - len(liveRows) + inputInLive
+	}
 	// A live area taller than the screen (a long suggestion list) still has to
 	// show the input: keep the tail.
 	if len(rows) > height {
@@ -628,10 +654,13 @@ func (m chatModel) altScreenView() string {
 		rows = rows[len(rows)-height:]
 		hintRow -= dropped
 		statusRow -= dropped
+		if inputInLive >= 0 {
+			inputRow -= dropped
+		}
 	}
 	// The mouse is matched against what was drawn, never against a
 	// recomputation that could disagree with it.
-	m.recordHit(rows, hintRow, statusRow)
+	m.recordHit(rows, hintRow, statusRow, inputRow)
 	if m.modal != nil {
 		ui.SetMouseViewport(m.modal, height-ui.MouseViewHeight(m.modal), height)
 	}

@@ -168,3 +168,60 @@ func TestHistorySearchBarEditingAndScrolling(t *testing.T) {
 		t.Fatal("End must move to the end of the search bar")
 	}
 }
+
+func historySearchMouse(button tea.MouseButton, y int) tea.MouseMsg {
+	return tea.MouseMsg{Button: button, Action: tea.MouseActionPress, X: 2, Y: y}
+}
+
+func TestHistorySearchMouseWheelScrollsResults(t *testing.T) {
+	m := newInputModel([]string{"match 0", "match 1", "match 2", "match 3", "match 4", "match 5"}, nil)
+	m = searchKey(m, tea.KeyCtrlR)
+	for i := 0; i < 4; i++ {
+		updated, cmd, handled := m.UpdateMouse(historySearchMouse(tea.MouseButtonWheelDown, 2))
+		if !handled || cmd != nil {
+			t.Fatal("wheel over the history results was not handled")
+		}
+		m = updated
+	}
+	view := ansi.Strip(m.View())
+	if m.searchIdx != 1 || !strings.Contains(view, "› match 1") || strings.Contains(view, "match 5") || strings.Contains(view, "match 0") {
+		t.Fatalf("wheel did not scroll the filtered results:\n%s", view)
+	}
+	updated, _, handled := m.UpdateMouse(historySearchMouse(tea.MouseButtonWheelUp, 2))
+	if !handled || updated.searchIdx != 2 {
+		t.Fatalf("wheel up selection = %d, handled=%v; want 2/true", updated.searchIdx, handled)
+	}
+	before := updated
+	if after, cmd, handled := updated.UpdateMouse(historySearchMouse(tea.MouseButtonWheelDown, 6)); handled || cmd != nil || after.searchIdx != before.searchIdx {
+		t.Fatal("wheel outside history search must fall through to the transcript")
+	}
+}
+
+func TestHistorySearchMouseClickRecallsWithoutSubmitting(t *testing.T) {
+	m := newInputModel([]string{"match 0", "match 1", "match 2", "match 3", "match 4", "match 5"}, nil)
+	m.setFullText("draft")
+	m = searchKey(m, tea.KeyCtrlR)
+	m = searchKey(m, tea.KeyCtrlU)
+	for i := 0; i < 4; i++ {
+		updated, _, _ := m.UpdateMouse(historySearchMouse(tea.MouseButtonWheelDown, 2))
+		m = updated
+	}
+	updated, cmd, handled := m.UpdateMouse(historySearchMouse(tea.MouseButtonLeft, 5))
+	m = updated
+	if !handled || cmd != nil || m.searchActive || m.submitted || m.fullText() != "match 1" || m.liveBuf != "draft" {
+		t.Fatalf("click recalled %q, active=%v submitted=%v handled=%v", m.fullText(), m.searchActive, m.submitted, handled)
+	}
+}
+
+func TestHistorySearchMouseConsumesDecorations(t *testing.T) {
+	m := newInputModel([]string{"entry"}, nil)
+	m = searchKey(m, tea.KeyCtrlR)
+	updated, cmd, handled := m.UpdateMouse(historySearchMouse(tea.MouseButtonLeft, 1))
+	if !handled || cmd != nil || !updated.searchActive || updated.searchIdx != 0 || updated.fullText() != "" {
+		t.Fatal("clicking the history header changed the search or input")
+	}
+	m.height = 1
+	if _, _, handled := m.UpdateMouse(historySearchMouse(tea.MouseButtonLeft, 1)); handled {
+		t.Fatal("a clipped history row must not be clickable")
+	}
+}

@@ -158,6 +158,69 @@ func TestSuggestionWindowScrollsAndWraps(t *testing.T) {
 	}
 }
 
+func suggestionMouse(button tea.MouseButton, y int) tea.MouseMsg {
+	return tea.MouseMsg{Button: button, Action: tea.MouseActionPress, X: 2, Y: y}
+}
+
+func TestSuggestionMouseWheelScrollsWindow(t *testing.T) {
+	m, suggestions := suggestionWindowFixture()
+	for i := 0; i < 4; i++ {
+		updated, cmd, handled := m.UpdateMouse(suggestionMouse(tea.MouseButtonWheelDown, 2))
+		if !handled || cmd != nil {
+			t.Fatal("wheel over the suggestion window was not handled")
+		}
+		m = updated
+	}
+	if m.suggSelected != 4 || m.suggOffset != 1 {
+		t.Fatalf("wheel selection/offset = %d/%d, want 4/1", m.suggSelected, m.suggOffset)
+	}
+	assertSuggestionWindow(t, m, suggestions, 1)
+
+	updated, _, handled := m.UpdateMouse(suggestionMouse(tea.MouseButtonWheelUp, 2))
+	if !handled || updated.suggSelected != 3 {
+		t.Fatalf("wheel up selection = %d, handled=%v; want 3/true", updated.suggSelected, handled)
+	}
+	before := updated
+	if after, cmd, handled := updated.UpdateMouse(suggestionMouse(tea.MouseButtonWheelDown, 0)); handled || cmd != nil || after.suggSelected != before.suggSelected {
+		t.Fatal("wheel outside the suggestion window must fall through to the transcript")
+	}
+}
+
+func TestSuggestionMouseClickMatchesEnter(t *testing.T) {
+	m, suggestions := suggestionWindowFixture()
+	for i := 0; i < 5; i++ {
+		updated, _, _ := m.UpdateMouse(suggestionMouse(tea.MouseButtonWheelDown, 2))
+		m = updated
+	}
+	assertSuggestionWindow(t, m, suggestions, 2)
+
+	// The bottom visible row is /command-5 after scrolling. Like the first
+	// Enter, the click accepts it without submitting an incomplete command.
+	updated, cmd, handled := m.UpdateMouse(suggestionMouse(tea.MouseButtonLeft, 5))
+	m = updated
+	if !handled || cmd != nil || m.firstLine() != "/command-5" || m.submitted {
+		t.Fatalf("click accepted %q, submitted=%v, handled=%v", m.firstLine(), m.submitted, handled)
+	}
+
+	// With the exact command in the input, another click is the second Enter.
+	updated, cmd, handled = m.UpdateMouse(suggestionMouse(tea.MouseButtonLeft, 2))
+	m = updated
+	if !handled || cmd == nil || !m.submitted || m.Value() != "/command-5" {
+		t.Fatal("clicking the completed command did not submit it")
+	}
+	if msg, ok := cmd().(InputSubmitMsg); !ok || msg.Value != "/command-5" {
+		t.Fatalf("click command = %#v, want InputSubmitMsg for /command-5", msg)
+	}
+}
+
+func TestSuggestionMouseConsumesWindowDecorations(t *testing.T) {
+	m, _ := suggestionWindowFixture()
+	updated, cmd, handled := m.UpdateMouse(suggestionMouse(tea.MouseButtonLeft, 1))
+	if !handled || cmd != nil || updated.firstLine() != "/" || updated.suggSelected != 0 {
+		t.Fatal("clicking the suggestion header changed the input")
+	}
+}
+
 func TestSuggestionWindowFilteringAndAcceptingHiddenCommand(t *testing.T) {
 	m, _ := suggestionWindowFixture()
 	for i := 0; i < 5; i++ {

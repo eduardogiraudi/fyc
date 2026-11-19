@@ -450,6 +450,74 @@ func (m inputModel) UpdateComponent(msg tea.Msg) (inputModel, tea.Cmd) {
 	updated, cmd := m.Update(msg)
 	return updated.(inputModel), cmd
 }
+
+// suggestionMouseTarget maps a row in View to the suggestion window. The
+// prompt calculation mirrors View, including hard-wrapped and multi-line input.
+func (m inputModel) suggestionMouseTarget(y int) (index int, item, inside bool) {
+	if len(m.suggestions) == 0 || m.submitted || m.searchActive {
+		return 0, false, false
+	}
+	promptWidth := len([]rune(m.promptPrefix()))
+	availableWidth := m.width - promptWidth
+	if availableWidth < 1 {
+		availableWidth = 1
+	}
+	promptRows := 0
+	for r, line := range m.lines {
+		wrapped, _, _ := wrapLine(line, m.col, availableWidth, r == m.row)
+		promptRows += len(wrapped)
+	}
+
+	firstItem := promptRows + 1 // prompt rows, then the window header
+	end := min(m.suggOffset+maxVisibleSuggestions, len(m.suggestions))
+	afterItems := firstItem + end - m.suggOffset
+	footer := afterItems
+	if m.suggExtra != "" {
+		footer += strings.Count(m.suggExtra, "\n") + 1
+	}
+	if y < promptRows || y > footer {
+		return 0, false, false
+	}
+	if y >= firstItem && y < afterItems {
+		return m.suggOffset + y - firstItem, true, true
+	}
+	return 0, false, true
+}
+
+// UpdateMouse handles coordinates relative to View. The chat translates screen
+// rows after final frame clipping, so a click can only hit a visible input popup.
+func (m inputModel) UpdateMouse(msg tea.MouseMsg) (InputModel, tea.Cmd, bool) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil, false
+	}
+	if m.searchActive {
+		return m.updateHistorySearchMouse(msg)
+	}
+	index, item, inside := m.suggestionMouseTarget(msg.Y)
+	if !inside {
+		return m, nil, false
+	}
+	// A mouse action must not leave a deferred Windows Enter waiting to submit.
+	m.pendingEnter = false
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		key := tea.KeyUp
+		if msg.Button == tea.MouseButtonWheelDown {
+			key = tea.KeyDown
+		}
+		updated, cmd := m.UpdateComponent(tea.KeyMsg{Type: key})
+		return updated, cmd, true
+	case tea.MouseButtonLeft:
+		if !item {
+			return m, nil, true
+		}
+		m.suggSelected = index
+		m.adjustSuggestionOffset()
+		updated, cmd := m.handleEnter()
+		return updated, cmd, true
+	}
+	return m, nil, false
+}
 func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 

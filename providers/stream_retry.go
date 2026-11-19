@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 
@@ -91,7 +92,9 @@ func StreamResendRetryable(ctx context.Context, err error) bool {
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return false
+		// HTTP/2 can fail before a response exists; treat this specific
+		// connection loss like a mid-stream transport failure.
+		return strings.Contains(urlErr.Err.Error(), "http2: client connection lost")
 	}
 	return isStreamTransportError(err)
 }

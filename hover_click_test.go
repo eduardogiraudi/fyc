@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"fuckyourcli/config"
+	"fuckyourcli/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -210,5 +211,91 @@ func TestHoverClearsWithTheScrollHint(t *testing.T) {
 	}
 	if m.hover != hoverNone {
 		t.Fatalf("hover = %v after the hint left the frame, want none", m.hover)
+	}
+}
+
+func slashMouseModel(t *testing.T, height int) chatModel {
+	t.Helper()
+	suggestions := []ui.Suggestion{
+		{Name: "/command-0", Description: "description"},
+		{Name: "/command-1", Description: "description"},
+		{Name: "/command-2", Description: "description"},
+		{Name: "/command-3", Description: "description"},
+		{Name: "/command-4", Description: "description"},
+		{Name: "/command-5", Description: "description"},
+		{Name: "/command-6", Description: "description"},
+	}
+	provider := func(line string) ([]ui.Suggestion, string) {
+		var matches []ui.Suggestion
+		for _, suggestion := range suggestions {
+			if strings.HasPrefix(suggestion.Name, line) {
+				matches = append(matches, suggestion)
+			}
+		}
+		return matches, "extra hint"
+	}
+	m := newChatModel(nil, nil, nil, provider)
+	m.width, m.height = 60, height
+	m.statsProviderInfo = ""
+	m.enableAltScreen([]string{"previous output"})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = next.(chatModel)
+	m.View()
+	return m
+}
+
+func TestSlashSuggestionMouseClickUsesDrawnRows(t *testing.T) {
+	for _, height := range []int{20, 6} {
+		t.Run(fmt.Sprintf("height-%d", height), func(t *testing.T) {
+			m := slashMouseModel(t, height)
+			x, y := modalCell(t, m, "/command-2")
+			next, cmd := m.Update(press(x, y))
+			m = next.(chatModel)
+			if cmd != nil {
+				t.Fatal("the first click submitted instead of completing")
+			}
+			if m.transcript.SelectionText() != "" || m.transcript.selActive {
+				t.Fatal("the suggestion click started a transcript selection")
+			}
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "/command-2") || strings.Contains(view, "/command-3") {
+				t.Fatalf("click did not filter to /command-2:\n%s", view)
+			}
+
+			// The second click has the same meaning as Enter on the exact command.
+			m.View()
+			next, cmd = m.Update(press(2, m.hit.inputRow+2))
+			m = next.(chatModel)
+			if cmd == nil {
+				t.Fatal("the second click did not submit the completed command")
+			}
+			msg, ok := cmd().(ui.InputSubmitMsg)
+			if !ok || msg.Value != "/command-2" {
+				t.Fatalf("second click message = %#v, want /command-2 submit", msg)
+			}
+		})
+	}
+}
+
+func TestSlashSuggestionWheelDoesNotScrollTranscript(t *testing.T) {
+	m := slashMouseModel(t, 16)
+	for i := 0; i < 30; i++ {
+		m.printCmd(fmt.Sprintf("line-%02d", i))
+	}
+	m.transcript.ScrollUp(4)
+	m.View()
+	offset := m.transcript.offset
+	x, y := modalCell(t, m, "/command-0")
+	next, cmd := m.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress, X: x, Y: y,
+	})
+	m = next.(chatModel)
+	if cmd != nil || m.transcript.offset != offset {
+		t.Fatal("the suggestion wheel scrolled the transcript")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(chatModel)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "/command-1") || strings.Contains(view, "/command-2") {
+		t.Fatalf("wheel did not move the suggestion selection:\n%s", view)
 	}
 }

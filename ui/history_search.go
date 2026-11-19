@@ -19,6 +19,42 @@ func (m *inputModel) findHistoryMatch(start int) {
 	}
 }
 
+func (m inputModel) historySearchMatches() []int {
+	query := strings.ToLower(string(m.searchQuery))
+	var matches []int
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if strings.Contains(strings.ToLower(m.history[i]), query) {
+			matches = append(matches, i)
+		}
+	}
+	return matches
+}
+
+func (m inputModel) historySearchVisible() int {
+	visible := maxVisibleSuggestions
+	if m.height == 1 {
+		return 0
+	}
+	if m.height > 0 {
+		visible = min(visible, max(0, m.height-2))
+	}
+	return visible
+}
+
+func historySearchOffset(matches []int, searchIdx, visible int) int {
+	if visible <= 0 {
+		return 0
+	}
+	selected := 0
+	for i, match := range matches {
+		if match == searchIdx {
+			selected = i
+			break
+		}
+	}
+	return max(0, selected-visible+1)
+}
+
 func (m inputModel) updateHistorySearch(msg tea.KeyMsg) (inputModel, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlR, tea.KeyDown:
@@ -92,19 +128,64 @@ func (m inputModel) updateHistorySearch(msg tea.KeyMsg) (inputModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m inputModel) historySearchView() string {
-	width := max(1, m.width)
-	query := strings.ToLower(string(m.searchQuery))
-	var matches []int
-	selected := 0
-	for i := len(m.history) - 1; i >= 0; i-- {
-		if strings.Contains(strings.ToLower(m.history[i]), query) {
-			if i == m.searchIdx {
-				selected = len(matches)
+// historySearchMouseTarget maps rows in the rendered search view to history
+// entries. Decorations are inside the component but are not selectable items.
+func (m inputModel) historySearchMouseTarget(y int) (index int, item, inside bool) {
+	matches := m.historySearchMatches()
+	visible := m.historySearchVisible()
+	rows := 1
+	if m.height != 1 {
+		rows = 2
+		if len(matches) == 0 {
+			if visible > 0 {
+				rows++
 			}
-			matches = append(matches, i)
+		} else {
+			rows += min(len(matches), visible)
 		}
 	}
+	if y < 0 || y >= rows {
+		return 0, false, false
+	}
+	if m.height == 1 || y < 2 || len(matches) == 0 {
+		return 0, false, true
+	}
+	match := historySearchOffset(matches, m.searchIdx, visible) + y - 2
+	if match < 0 || match >= len(matches) {
+		return 0, false, true
+	}
+	return matches[match], true, true
+}
+
+func (m inputModel) updateHistorySearchMouse(msg tea.MouseMsg) (InputModel, tea.Cmd, bool) {
+	index, item, inside := m.historySearchMouseTarget(msg.Y)
+	if !inside {
+		return m, nil, false
+	}
+	// A mouse action must not leave a deferred Windows Enter waiting to submit.
+	m.pendingEnter = false
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		key := tea.KeyUp
+		if msg.Button == tea.MouseButtonWheelDown {
+			key = tea.KeyDown
+		}
+		updated, cmd := m.updateHistorySearch(tea.KeyMsg{Type: key})
+		return updated, cmd, true
+	case tea.MouseButtonLeft:
+		if !item {
+			return m, nil, true
+		}
+		m.searchIdx = index
+		updated, cmd := m.updateHistorySearch(tea.KeyMsg{Type: tea.KeyEnter})
+		return updated, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m inputModel) historySearchView() string {
+	width := max(1, m.width)
+	matches := m.historySearchMatches()
 	var b strings.Builder
 	prefix := ansi.Truncate("Search history ❯ ", max(0, width-2), "")
 	budget := max(0, width-ansi.StringWidth(prefix)-1)
@@ -125,16 +206,13 @@ func (m inputModel) historySearchView() string {
 	if m.height == 1 {
 		return b.String()
 	}
-	header := fmt.Sprintf("History · %d matches · ↑/↓ select · Enter recall · Esc/Ctrl+C cancel", len(matches))
+	header := fmt.Sprintf("History · %d matches · ↑/↓ or wheel · Enter/click recall · Esc cancel", len(matches))
 	b.WriteString(DimStyle.Render(ansi.Truncate(header, width, "…")) + "\n")
-	visible := maxVisibleSuggestions
-	if m.height > 0 {
-		visible = min(visible, max(0, m.height-2))
-	}
+	visible := m.historySearchVisible()
 	if len(matches) == 0 && visible > 0 {
 		b.WriteString(DimStyle.Render(ansi.Truncate("No matching history entry", width, "…")) + "\n")
 	}
-	offset := max(0, selected-visible+1)
+	offset := historySearchOffset(matches, m.searchIdx, visible)
 	if visible > 0 {
 		for _, i := range matches[offset:min(len(matches), offset+visible)] {
 			text := "  " + strings.Join(strings.Fields(m.history[i]), " ")
