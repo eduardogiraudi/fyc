@@ -62,6 +62,18 @@ func main() {
 
 		switch os.Args[1] {
 
+		case "add":
+			if err := runAddCommand(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "fuckyourcli add: "+err.Error())
+				os.Exit(1)
+			}
+			return
+		case "mcp":
+			if err := runMCPCommand(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "fuckyourcli mcp: "+err.Error())
+				os.Exit(1)
+			}
+			return
 		case "config":
 			// Run configuration and check if user wants to enter chat
 			if runConfig() {
@@ -175,7 +187,7 @@ func main() {
 	emit(ui.TipsBlock(cfg.AltScreen))
 
 	// Initialize MCP servers in background with spinner
-	session.MCPManager = mcp.NewMCPManager(session.Version)
+	session.MCPManager = mcp.NewMCPManager(session.Version, config.MCPOAuthStore{})
 	mcpDone := make(chan struct{})
 	var mcpWg sync.WaitGroup
 	mcpWg.Add(1)
@@ -184,18 +196,18 @@ func main() {
 		defer close(mcpDone)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := session.MCPManager.Initialize(ctx, config.Get().MCPServers); err != nil {
+		if err := session.MCPManager.Initialize(ctx, config.SessionMCPServers(session.RestrictedRoot)); err != nil {
 			mcpWarnings = append(mcpWarnings, fmt.Sprintf("Warning: MCP initialization failed: %v", err))
-		} else {
-			mcpTools, err := session.MCPManager.ListTools(ctx)
-			if err != nil {
-				mcpWarnings = append(mcpWarnings, fmt.Sprintf("Warning: failed to list MCP tools: %v", err))
-			} else {
-				session.AvailableTools = append(session.AvailableTools, mcpTools...)
-				if len(mcpTools) > 0 {
-					mcpWarnings = append(mcpWarnings, fmt.Sprintf("Loaded %d MCP tools", len(mcpTools)))
-				}
-			}
+		}
+		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer listCancel()
+		mcpTools, err := session.MCPManager.ListTools(listCtx)
+		if err != nil {
+			mcpWarnings = append(mcpWarnings, fmt.Sprintf("Warning: failed to list MCP tools: %v", err))
+		}
+		session.AvailableTools = append(session.AvailableTools, mcpTools...)
+		if len(mcpTools) > 0 {
+			mcpWarnings = append(mcpWarnings, fmt.Sprintf("Loaded %d MCP tools", len(mcpTools)))
 		}
 		tools.SetGlobalSubagentTools(session.AvailableTools)
 	}()

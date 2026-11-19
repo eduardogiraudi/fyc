@@ -68,10 +68,47 @@ fuckyourcli config      # configure providers, models and MCP servers
 fuckyourcli serve       # start the AG-UI HTTP backend
 fuckyourcli update      # download, verify and install the latest release
 fuckyourcli models      # show the model catalog
+fuckyourcli add ./plugin # install skills + MCP for this project
 fuckyourcli --help      # show help
 fuckyourcli --version   # show version and short binary SHA-256
 fuckyourcli --hash      # print the full binary SHA-256
 ```
+
+### Install plugins
+
+`fuckyourcli add <source>` installs a portable [Agent Plugins 1.0.0](https://agent-plugins.org/) package containing root `plugin.json`, `skills/<name>/SKILL.md`, and optional `mcp.json`. Sources can be local directories, GitHub repositories (`owner/repo` or HTTPS URL), or HTTPS ZIP archives with `plugin.json` at their root.
+
+```bash
+fuckyourcli add ./my-plugin
+fuckyourcli add owner/repo --subdir plugins/my-plugin --ref v1.0.0
+fuckyourcli add owner/repo --global
+fuckyourcli add ./my-plugin --replace
+```
+
+The default project scope installs into `.fyc/plugins/<name>` in the current directory; `--global` uses the config directory's `plugins/<name>`. An escaped destination, symlink, unsafe archive path, or oversized package is refused. Nothing is overwritten without `--replace`. The installer snapshots the package, previews its skills and MCP commands, and asks for approval (`--yes` explicitly approves installation without prompting).
+
+Approval records live in the user config directory's `plugins.json`, not in the repository. Cloning someone else's `.fyc/plugins` therefore does not approve their MCP processes. Changed installed files are disabled until reviewed with `add --replace`; update the source and reinstall rather than editing the installed copy. Project plugins override global plugins of the same name; skills and MCP servers are namespaced as `<plugin>--<component>`. Remove the installed directory to stop loading a plugin.
+
+No installation scripts or hooks run. **Local MCP commands run on the host outside the tool sandbox**, starting in the next chat or AG-UI session. Skill descriptions are discovered through the existing skills tools; full instructions are read only for matching tasks or explicit `/skills <plugin>--<skill>` invocations.
+
+Portable MCP `stdio`, `streamable-http`, and `sse` transports are supported, including plugin-relative commands, `cwd`, `${PLUGIN_ROOT}`, and `${PLUGIN_DATA}`. Use `${VARIABLE}` placeholders for credentials, never literal secrets in the package. Missing values can be entered with a masked prompt and are stored only in `auth.json` (otherwise set them in the environment); `auth.json` takes precedence. With `--yes`, missing credentials are reported but never prompted for, and the plugin's MCP servers stay disabled until configured. Host-specific MCP extensions, legacy Codex/Claude manifests, hooks, and marketplace catalogs are not supported by this installer.
+
+### MCP OAuth
+
+HTTP MCP servers requiring OAuth need an explicit login after installation. For example, a generic `my-plugin` package exposing a `my-server` MCP component uses the name `my-plugin--my-server`:
+
+```bash
+fuckyourcli mcp status
+fuckyourcli mcp login my-plugin--my-server
+fuckyourcli mcp login my-plugin--my-server --no-browser # open the printed URL manually
+fuckyourcli mcp logout my-plugin--my-server
+```
+
+Run these commands from the project containing the plugin, then start a new chat. Login discovers the server's OAuth metadata, registers a public client when supported, and uses PKCE with a state-validated loopback callback. A preregistered client can be supplied with `--client-id ID`; confidential clients use `--client-secret-env VARIABLE`, never a secret on the command line. Use `--callback-port PORT` if that client requires a fixed `http://127.0.0.1:PORT/callback` redirect URI. `--scopes "scope1 scope2"` overrides the advertised scopes. The browser and fyc must be able to reach the same local callback; login times out after five minutes or cancels with Ctrl+C.
+
+Client registration, access tokens, and refresh tokens are stored only in `auth.json`, keyed by server name and endpoint. Both HTTP transports renew expired tokens without prompting, persist refresh-token rotation under a per-server lock, and suggest `mcp login` if authentication is required. An explicit `Authorization` header takes precedence: remove it before using OAuth. OAuth discovery/token requests require HTTPS except on the configured loopback origin, refuse redirects, and block private-network destinations. OAuth client-ID metadata documents are not currently supported; servers must offer dynamic registration or accept a preregistered client.
+
+A failed server no longer hides the others: startup and tool discovery preserve healthy servers and report individual errors. Logout deletes local credentials only; revoke them at the issuer if needed.
 
 Keyboard shortcuts inside the chat:
 

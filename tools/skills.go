@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"fuckyourcli/plugins"
 	"fuckyourcli/store"
 )
 
@@ -31,6 +32,11 @@ func DiscoverSkills(restrictedRoot string) map[string]string {
 			}
 			desc := extractSkillDescription(string(data))
 			skills[e.Name()] = desc
+		}
+	}
+	for _, installed := range plugins.Load(restrictedRoot) {
+		for _, skill := range installed.Package.Skills {
+			skills[skill.Name] = skill.Description
 		}
 	}
 	return skills
@@ -65,12 +71,24 @@ func FindSkillPath(name, restrictedRoot string) string {
 			result = p
 		}
 	}
+	for _, installed := range plugins.Load(restrictedRoot) {
+		for _, skill := range installed.Package.Skills {
+			if skill.Name == name {
+				return filepath.Join(installed.Entry.Path, filepath.FromSlash(skill.Path))
+			}
+		}
+	}
 	return result
 }
 
 // findSkillDir returns the base directory of a skill, searching global and project locations.
 // Project-level skills take priority over global ones.
 func findSkillDir(name, restrictedRoot string) string {
+	if strings.Contains(name, "--") {
+		if p := FindSkillPath(name, restrictedRoot); p != "" {
+			return filepath.Dir(p)
+		}
+	}
 	locations := getSkillLocations(restrictedRoot)
 	for i := len(locations) - 1; i >= 0; i-- {
 		p := filepath.Join(locations[i], name)

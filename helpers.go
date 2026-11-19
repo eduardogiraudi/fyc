@@ -276,6 +276,8 @@ func printHelp() {
 	fmt.Println("  fuckyourcli status       show whether a newer release is available")
 	fmt.Println("  fuckyourcli update       update to the latest release (or: update <version>)")
 	fmt.Println("  fuckyourcli models       model catalog: 'models' shows stats, 'models update' refreshes from models.dev")
+	fmt.Println("  fuckyourcli add <source> install a plugin (skills + MCP); use 'add --help' for options")
+	fmt.Println("  fuckyourcli mcp          OAuth: status | login <name> | logout <name>")
 	fmt.Println()
 	fmt.Println("Providers:")
 	fmt.Println("  - Google Gemini (cloud)")
@@ -432,15 +434,16 @@ func newSession() *ChatSession {
 	s.Commit = computeShortSHA()
 
 	cfg := config.Get()
+	cfg.MCPServers = config.SessionMCPServers(s.RestrictedRoot)
 
-	s.MCPManager = mcp.NewMCPManager(s.Version)
+	s.MCPManager = mcp.NewMCPManager(s.Version, config.MCPOAuthStore{})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := s.MCPManager.Initialize(ctx, cfg.MCPServers); err == nil {
-		if mcpTools, err := s.MCPManager.ListTools(ctx); err == nil {
-			s.AvailableTools = append(s.AvailableTools, mcpTools...)
-		}
-	}
+	_ = s.MCPManager.Initialize(ctx, cfg.MCPServers)
+	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer listCancel()
+	mcpTools, _ := s.MCPManager.ListTools(listCtx)
+	s.AvailableTools = append(s.AvailableTools, mcpTools...)
 	tools.SetGlobalSubagentTools(s.AvailableTools)
 
 	s.GlobalIgnore = tools.LoadIgnoreFiles(s.RestrictedRoot)

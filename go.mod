@@ -25,6 +25,7 @@ require (
 	github.com/sergi/go-diff v1.4.0
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	golang.org/x/net v0.47.0
+	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.41.0
 )
@@ -68,6 +69,5 @@ require (
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 )

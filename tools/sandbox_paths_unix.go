@@ -2,7 +2,12 @@
 
 package tools
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+
+	"fuckyourcli/store"
+)
 
 // standardAllowedDirs builds standard RW/RO lists from home/cache/tmp.
 func standardAllowedDirs(restrictedRoot string) (rw []string, ro []string) {
@@ -55,6 +60,7 @@ func standardAllowedDirs(restrictedRoot string) (rw []string, ro []string) {
 	}
 
 	ro = []string{
+		filepath.Join(store.ConfigDir(), "plugins"),
 		"/usr",
 		"/bin",
 		"/lib",

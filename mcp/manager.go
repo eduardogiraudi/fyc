@@ -3,13 +3,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"fuckyourcli/mcpauth"
 	"fuckyourcli/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,86 +26,72 @@ type MCPManager struct {
 	Configs  []types.MCPServerConfig // saved for reconnections
 	version  string
 	mu       sync.RWMutex
+	secrets  mcpauth.Store
 }
 
 // NewMCPManager creates a new instance of MCPManager.
-func NewMCPManager(version string) *MCPManager {
-	return &MCPManager{
+func NewMCPManager(version string, secrets ...mcpauth.Store) *MCPManager {
+	m := &MCPManager{
 		Sessions: make(map[string]*mcp.ClientSession),
 		Clients:  make(map[string]*mcp.Client),
-		Configs:  nil,
 		version:  version,
 	}
+	if len(secrets) > 0 {
+		m.secrets = secrets[0]
+	}
+	return m
 }
 
 // Initialize starts connections to the MCP servers defined in config.
 // Supports transports: "stdio", "sse", "streamableHttp".
 func (m *MCPManager) Initialize(ctx context.Context, configs []types.MCPServerConfig) error {
-	// Save configs for reconnect
+	m.mu.Lock()
 	m.Configs = configs
-
-	for _, cfg := range configs {
+	m.mu.Unlock()
+	failures := make([]error, len(configs))
+	seen := make(map[string]bool)
+	var wg sync.WaitGroup
+	for i, cfg := range configs {
 		if cfg.Disabled {
 			continue
 		}
-		transport := cfg.Transport
-		if transport == "" {
-			transport = "stdio" // default backward compatible
+		if seen[cfg.Name] {
+			failures[i] = fmt.Errorf("duplicate MCP server name %s", cfg.Name)
+			continue
 		}
-
-		var t mcp.Transport
-
-		client := mcp.NewClient(&mcp.Implementation{
-			Name:    "fuckyourcli",
-			Version: m.version,
-		}, nil)
-
-		switch transport {
-		case "stdio":
-			cmd := exec.Command(cfg.Command, cfg.Args...)
-			if len(cfg.Env) > 0 {
-				cmd.Env = os.Environ()
-				for k, v := range cfg.Env {
-					cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-				}
+		seen[cfg.Name] = true
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			serverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			transport, err := m.buildTransport(cfg)
+			if err != nil {
+				failures[i] = fmt.Errorf("MCP server %s: %w", cfg.Name, err)
+				return
 			}
-			t = &mcp.CommandTransport{
-				Command: cmd,
+			client := mcp.NewClient(&mcp.Implementation{Name: "fuckyourcli", Version: m.version}, nil)
+			session, err := client.Connect(serverCtx, transport, nil)
+			if err != nil {
+				failures[i] = fmt.Errorf("failed to connect to MCP server %s: %w", cfg.Name, err)
+				return
 			}
-
-		case "sse":
-			if cfg.Endpoint == "" {
-				return fmt.Errorf("MCP server %s: endpoint required for SSE transport", cfg.Name)
-			}
-			t = &mcp.SSEClientTransport{
-				Endpoint:   cfg.Endpoint,
-				HTTPClient: httpClientWithHeaders(cfg.Headers),
-			}
-
-		case "streamableHttp":
-			if cfg.Endpoint == "" {
-				return fmt.Errorf("MCP server %s: endpoint required for streamableHttp transport", cfg.Name)
-			}
-			t = &mcp.StreamableClientTransport{
-				Endpoint:   cfg.Endpoint,
-				HTTPClient: httpClientWithHeaders(cfg.Headers),
-			}
-
-		default:
-			return fmt.Errorf("MCP server %s: unknown transport %q", cfg.Name, transport)
-		}
-
-		session, err := client.Connect(ctx, t, nil)
-		if err != nil {
-			return fmt.Errorf("failed to connect to MCP server %s: %w", cfg.Name, err)
-		}
-
-		m.mu.Lock()
-		m.Sessions[cfg.Name] = session
-		m.Clients[cfg.Name] = client
-		m.mu.Unlock()
+			m.mu.Lock()
+			m.Sessions[cfg.Name] = session
+			m.Clients[cfg.Name] = client
+			m.mu.Unlock()
+		}()
 	}
-	return nil
+	wg.Wait()
+	return errors.Join(failures...)
+}
+
+func (m *MCPManager) httpClient(cfg types.MCPServerConfig) *http.Client {
+	base := httpClientWithHeaders(cfg.Headers)
+	if m.secrets == nil {
+		return base
+	}
+	return mcpauth.HTTPClient(base, cfg, m.secrets)
 }
 
 // httpClientWithHeaders creates an http.Client that adds custom headers to every request.
@@ -140,25 +130,42 @@ func (m *MCPManager) ListTools(ctx context.Context) ([]types.Tool, error) {
 	}
 	m.mu.RUnlock()
 
-	allTools, err := m.listToolsOnce(ctx, serverNames)
-	if err != nil && isEOFError(err) {
-		// Try to reconnect all servers that failed
-		for _, name := range serverNames {
-			m.reconnect(ctx, name)
-		}
-		return m.listToolsOnce(ctx, serverNames)
+	sort.Strings(serverNames)
+	results := make([][]types.Tool, len(serverNames))
+	failures := make([]error, len(serverNames))
+	var wg sync.WaitGroup
+	for i, name := range serverNames {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			serverCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			listed, err := m.listToolsOnce(serverCtx, []string{name})
+			if isEOFError(err) {
+				if reconnectErr := m.reconnect(serverCtx, name); reconnectErr != nil {
+					err = errors.Join(err, reconnectErr)
+				} else {
+					listed, err = m.listToolsOnce(serverCtx, []string{name})
+				}
+			}
+			results[i], failures[i] = listed, err
+		}()
 	}
-	return allTools, err
+	wg.Wait()
+	var allTools []types.Tool
+	for _, listed := range results {
+		allTools = append(allTools, listed...)
+	}
+	return allTools, errors.Join(failures...)
 }
 
 // listToolsOnce executes ListTools on all servers (without retry).
 func (m *MCPManager) listToolsOnce(ctx context.Context, serverNames []string) ([]types.Tool, error) {
 	var allTools []types.Tool
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	for _, serverName := range serverNames {
+		m.mu.RLock()
 		session, ok := m.Sessions[serverName]
+		m.mu.RUnlock()
 		if !ok {
 			continue // session just removed, skip
 		}
@@ -298,7 +305,7 @@ func (m *MCPManager) reconnect(ctx context.Context, serverName string) error {
 		Version: m.version,
 	}, nil)
 
-	t, err := buildTransport(cfg)
+	t, err := m.buildTransport(*cfg)
 	if err != nil {
 		return fmt.Errorf("build transport: %w", err)
 	}
@@ -318,6 +325,10 @@ func (m *MCPManager) reconnect(ctx context.Context, serverName string) error {
 
 // buildTransport builds the correct transport based on the config.
 func buildTransport(cfg *types.MCPServerConfig) (mcp.Transport, error) {
+	return (&MCPManager{}).buildTransport(*cfg)
+}
+
+func (m *MCPManager) buildTransport(cfg types.MCPServerConfig) (mcp.Transport, error) {
 	transport := cfg.Transport
 	if transport == "" {
 		transport = "stdio"
@@ -325,6 +336,7 @@ func buildTransport(cfg *types.MCPServerConfig) (mcp.Transport, error) {
 	switch transport {
 	case "stdio":
 		cmd := exec.Command(cfg.Command, cfg.Args...)
+		cmd.Dir = cfg.WorkingDirectory
 		if len(cfg.Env) > 0 {
 			cmd.Env = os.Environ()
 			for k, v := range cfg.Env {
@@ -338,7 +350,7 @@ func buildTransport(cfg *types.MCPServerConfig) (mcp.Transport, error) {
 		}
 		return &mcp.SSEClientTransport{
 			Endpoint:   cfg.Endpoint,
-			HTTPClient: httpClientWithHeaders(cfg.Headers),
+			HTTPClient: m.httpClient(cfg),
 		}, nil
 	case "streamableHttp":
 		if cfg.Endpoint == "" {
@@ -346,7 +358,7 @@ func buildTransport(cfg *types.MCPServerConfig) (mcp.Transport, error) {
 		}
 		return &mcp.StreamableClientTransport{
 			Endpoint:   cfg.Endpoint,
-			HTTPClient: httpClientWithHeaders(cfg.Headers),
+			HTTPClient: m.httpClient(cfg),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown transport %q", transport)

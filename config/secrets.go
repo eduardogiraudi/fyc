@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"fuckyourcli/store"
@@ -139,6 +140,62 @@ func secretLookup(auth map[string]string) func(string) (string, bool) {
 		}
 		return os.LookupEnv(name)
 	}
+}
+
+// ResolvePluginValue refuses missing credentials instead of sending an empty value.
+func ResolvePluginValue(value string) (string, error) {
+	auth, _ := loadAuthStore()
+	lookup := secretLookup(auth)
+	for _, match := range secretPlaceholderRe.FindAllStringSubmatch(value, -1) {
+		if v, ok := lookup(match[1]); (!ok || v == "") && match[2] == "" {
+			return "", fmt.Errorf("missing variable %s (set it in the environment or auth.json)", match[1])
+		}
+	}
+	return expandPlaceholders(value, lookup), nil
+}
+
+// MissingPluginVariables returns required, unresolved variables without their values.
+func MissingPluginVariables(values []string) []string {
+	auth, _ := loadAuthStore()
+	lookup := secretLookup(auth)
+	seen := map[string]bool{}
+	var names []string
+	for _, value := range values {
+		for _, match := range secretPlaceholderRe.FindAllStringSubmatch(value, -1) {
+			name := match[1]
+			if name == "PLUGIN_ROOT" || name == "PLUGIN_DATA" || match[2] != "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			if v, ok := lookup(name); !ok || v == "" {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// SavePluginSecret writes a prompted value only to the existing auth store.
+func SavePluginSecret(name, value string) error {
+	if _, ok := solePlaceholder("${" + name + "}"); !ok || value == "" {
+		return fmt.Errorf("invalid secret")
+	}
+	if err := store.EnsureDir(store.ConfigDir(), store.DirPerm); err != nil {
+		return err
+	}
+	ensureConfigDefenses(store.ConfigDir())
+	lock, err := store.Lock(AuthFilePath() + ".lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	auth, corrupt := loadAuthStore()
+	if corrupt {
+		return fmt.Errorf("auth.json is unreadable; no credentials were written")
+	}
+	auth[name] = value
+	return saveAuthStore(auth)
 }
 
 // expandConfigSecrets resolves every secret-bearing field in place: the

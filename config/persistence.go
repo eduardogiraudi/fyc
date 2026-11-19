@@ -357,7 +357,16 @@ func SaveE() error {
 	}
 	config.Schema = CurrentSchemaVersion
 
+	// Serialize all auth.json writers, including background MCP token rotation.
+	authLock, lockErr := store.Lock(AuthFilePath() + ".lock")
+	if lockErr == nil {
+		defer authLock.Unlock()
+	}
 	authStore, authCorrupt := loadAuthStore()
+	if lockErr != nil {
+		store.Notice("auth: cannot lock %s: %v; keeping existing secret expressions", AuthFilePath(), lockErr)
+		authCorrupt = true
+	}
 	out, updatedAuth, authChanged := collapseConfigSecrets(config, authStore, authCorrupt)
 	out.Schema = CurrentSchemaVersion
 	if authChanged {

@@ -4,7 +4,7 @@
 
 _fuckyourcli() {
     local -a main_commands global_flags serve_flags
-    main_commands=(config auto serve sandbox status update models)
+    main_commands=(config auto serve sandbox status update models add mcp)
     global_flags=(--help --version --hash)
     serve_flags=(--addr --token --permissions --cors --max-threads --hitl --interrupts --interaction-timeout)
 
@@ -15,6 +15,13 @@ _fuckyourcli() {
     fi
 
     case "${words[2]}" in
+        mcp)
+            if (( CURRENT == 3 )); then
+                _values 'subcommand' status login logout --help
+            elif [[ "${words[3]}" == "login" ]] && (( CURRENT > 4 )); then
+                _arguments '--no-browser[Print URL only]' '--client-id[OAuth client ID]:client ID:' '--client-secret-env[Secret environment variable]:variable:' '--callback-port[Fixed loopback port]:port:' '--scopes[Space-separated scopes]:scopes:' '--help[Show help]'
+            fi ;;
+        add)     _values 'flag' --global --project --ref --subdir --replace --yes --help; _files ;;
         serve)   _describe 'flag' serve_flags ;;
         config)  _values 'subcommand' show set reset ;;
         auto)    _values 'subcommand' enable disable status ;;

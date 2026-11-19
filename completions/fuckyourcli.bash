@@ -7,7 +7,7 @@ _fuckyourcli() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Main top-level commands
-    local main_commands="config auto serve sandbox status update models"
+    local main_commands="config auto serve sandbox status update models add mcp"
     local global_flags="--help --version --hash"
 
     # If we are at the first argument after 'fuckyourcli'
@@ -19,7 +19,7 @@ _fuckyourcli() {
     # Flags that require a value: if we are immediately after one of these,
     # do not suggest other flags (allow value input).
     case "${prev}" in
-        --addr|--token|--state-dir|--cors|--max-threads|--permissions|--interaction-timeout)
+        --addr|--token|--state-dir|--cors|--max-threads|--permissions|--interaction-timeout|--ref|--subdir|--client-id|--client-secret-env|--callback-port|--scopes)
             return 0
             ;;
         --hitl|--interrupts)
@@ -28,6 +28,18 @@ _fuckyourcli() {
             ;;
     esac
 
+    if [[ "${COMP_WORDS[1]}" == "mcp" ]]; then
+        if [ $COMP_CWORD -eq 2 ]; then
+            COMPREPLY=( $(compgen -W "status login logout --help" -- "$cur") )
+        elif [[ "${COMP_WORDS[2]}" == "login" && $COMP_CWORD -gt 3 ]]; then
+            COMPREPLY=( $(compgen -W "--no-browser --client-id --client-secret-env --callback-port --scopes --help" -- "$cur") )
+        fi
+        return 0
+    fi
+    if [[ "${COMP_WORDS[1]}" == "add" ]]; then
+        COMPREPLY=( $(compgen -W "--global --project --ref --subdir --replace --yes --help" -- "$cur") $(compgen -f -- "$cur") )
+        return 0
+    fi
     # If the subcommand is 'serve', always suggest serve flags,
     # regardless of how many have already been typed
     # (so 'serve' can have multiple flags simultaneously).

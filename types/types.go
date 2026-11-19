@@ -192,6 +192,8 @@ type MCPServerConfig struct {
 	Args      []string          `json:"args"`
 	Env       map[string]string `json:"env,omitempty"`
 	Disabled  bool              `json:"disabled,omitempty"`
+	// WorkingDirectory is runtime-only for installed plugins, never config.json.
+	WorkingDirectory string `json:"-"`
 }
 
 // ToolCallDisplay holds a single tool call entry for live UI rendering.
