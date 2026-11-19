@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-11-19
+
+### Added
+
+- session: replay history when resuming a chat (`a963d05`).
+- compaction: trigger on the provider's measured context size, local estimate as fallback (`51b0189`).
+- ui: add opt-in alt-screen chat TUI, off by default (`59ae8b8`).
+- ui: make the mode badge and the scroll hint buttons in alt screen (`b514683`).
+- ui: resend failed streams after visible output in alt screen (`15caf4c`).
+- ui: show colored line counts for anchored edits (`25ffef5`).
+- add history search bar (`571251e`).
+- chat: add @file mentions with autocomplete and bounded text and image attachments (`1258eee`).
+- ignore: let scoped .fycignore rules replace inherited .gitignore rules (`07757cf`).
+- ui: add hover and mouse controls to hosted menus, confirmations, settings and viewers (`7338a24`).
+- ui: add fixed search bar to model selectors in REPL and alt-screen TUI (`43c8ef3`).
+- plugins: add `add` command for Agent Plugins and MCP OAuth login (`1dc4b46`).
+- ui: add mouse navigation for input popups and retry lost HTTP/2 streams (`d03171a`).
+- ui: add hover highlight to slash/@ suggestion and history search popups (`14a54f8`).
+- ui: expand tool output in place (`e258218`).
+
+### Fixed
+
+- sh: report nonzero exit codes neutrally (`98ff1c9`).
+- ui: prevent premature markdown breaks and remove padding (`b28168f`).
+- codex: avoid false quota detection in response content (`6a569b5`).
+- history: preserve multiline prompts as single entries (`f9ed6f6`).
+- ignore: stop applying .dockerignore rules to workspace tools (`07757cf`).
+- provider: offer to reuse the configured model and preserve configuration on cancellation (`43c8ef3`).
+
 ## [1.4.0] - 2026-11-17
 
 ### Added
