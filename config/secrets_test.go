@@ -483,3 +483,133 @@ func TestUnresolvedPlaceholderIsNoticed(t *testing.T) {
 	}
 	t.Fatalf("no notice for the unresolved placeholder, got %v", notices)
 }
+
+// TestRemovedProviderSecretIsPrunedFromAuthJSON is the regression test for the
+// leak where deleting a provider left its API key in auth.json: the removed
+// entry never reaches collapseField, so nothing ever deleted the variable.
+func TestRemovedProviderSecretIsPrunedFromAuthJSON(t *testing.T) {
+	dir := withConfigDir(t)
+	AddOpenAICompatibleProvider("Alpha", "https://a.example", "sk-alpha", "m1")
+	AddOpenAICompatibleProvider("Beta", "https://b.example", "sk-beta", "m2")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	auth := readAuth(t, dir)
+	if auth["FYC_OPENAI_ALPHA_API_KEY"] != "sk-alpha" || auth["FYC_OPENAI_BETA_API_KEY"] != "sk-beta" {
+		t.Fatalf("precondition: both keys must be in auth.json, got %v", auth)
+	}
+
+	RemoveOpenAICompatibleProvider("Alpha")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE after remove: %v", err)
+	}
+
+	auth = readAuth(t, dir)
+	if v, ok := auth["FYC_OPENAI_ALPHA_API_KEY"]; ok {
+		t.Fatalf("removed provider's API key is still in auth.json: %q", v)
+	}
+	if auth["FYC_OPENAI_BETA_API_KEY"] != "sk-beta" {
+		t.Fatalf("remaining provider's key was lost: %v", auth)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, configFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "Alpha") || strings.Contains(string(raw), "sk-alpha") {
+		t.Fatalf("removed provider still present in config.json: %s", raw)
+	}
+
+	// The cleanup must survive a restart: reload and save once more.
+	config = defaults()
+	if err := LoadE(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE after reload: %v", err)
+	}
+	if _, ok := readAuth(t, dir)["FYC_OPENAI_ALPHA_API_KEY"]; ok {
+		t.Fatal("removed provider's key came back after reload")
+	}
+}
+
+// TestRemovedProviderPrunesEveryProviderKind covers the three Remove* paths.
+func TestRemovedProviderPrunesEveryProviderKind(t *testing.T) {
+	dir := withConfigDir(t)
+	AddOpenAICompatibleProvider("P", "https://x.example", "sk-chat", "m")
+	AddOpenAIResponsesCompatibleProvider("P", "https://x.example", "sk-resp", "m")
+	AddAnthropicProvider("P", "https://x.example", "sk-anth", "m")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	if n := len(readAuth(t, dir)); n != 3 {
+		t.Fatalf("precondition: want 3 secrets, got %d", n)
+	}
+
+	RemoveOpenAICompatibleProvider("P")
+	RemoveOpenAIResponsesCompatibleProvider("P")
+	RemoveAnthropicProvider("P")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	if auth := readAuth(t, dir); len(auth) != 0 {
+		t.Fatalf("auth.json still holds secrets of removed providers: %v", auth)
+	}
+}
+
+// TestPruneKeepsSharedAndHandWrittenVariables: a variable still referenced by
+// another field, and one the user wrote by hand (not generated), must survive
+// the removal of a provider that referenced them.
+func TestPruneKeepsSharedAndHandWrittenVariables(t *testing.T) {
+	dir := withConfigDir(t)
+	cfg := fmt.Sprintf(`{"schema":%d,"provider":"gemini","model":"m",
+	  "gemini_api_key":"${FYC_SHARED}",
+	  "openai_compatible_providers":[
+	    {"name":"A","base_url":"https://a","api_key":"${FYC_SHARED}","model":"m"},
+	    {"name":"B","base_url":"https://b","api_key":"${MY_OWN_KEY}","model":"m"},
+	    {"name":"C","base_url":"https://c","api_key":"${FYC_ONLY_C}","model":"m"}]}`, CurrentSchemaVersion)
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, authFileName), []byte(`{"FYC_SHARED":"s","MY_OWN_KEY":"h","OAUTH_TOKEN":"o","FYC_ONLY_C":"c"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := LoadE(); err != nil {
+		t.Fatalf("LoadE: %v", err)
+	}
+	RemoveOpenAICompatibleProvider("A") // FYC_SHARED is still used by gemini
+	RemoveOpenAICompatibleProvider("B") // MY_OWN_KEY is hand-written
+	RemoveOpenAICompatibleProvider("C") // FYC_ONLY_C is generated and now orphaned
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	auth := readAuth(t, dir)
+	for _, k := range []string{"FYC_SHARED", "MY_OWN_KEY", "OAUTH_TOKEN"} {
+		if _, ok := auth[k]; !ok {
+			t.Errorf("%s was wrongly deleted from auth.json: %v", k, auth)
+		}
+	}
+	if _, ok := auth["FYC_ONLY_C"]; ok {
+		t.Errorf("orphaned generated variable FYC_ONLY_C was not pruned: %v", auth)
+	}
+}
+
+// TestPruneIsSkippedWhenAuthIsCorrupt: with an unreadable auth.json nothing may
+// be written, so removal must not try to prune (and must not overwrite it).
+func TestPruneIsSkippedWhenAuthIsCorrupt(t *testing.T) {
+	dir := withConfigDir(t)
+	AddOpenAICompatibleProvider("Alpha", "https://a.example", "sk-alpha", "m1")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	authPath := filepath.Join(dir, authFileName)
+	if err := os.WriteFile(authPath, []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	RemoveOpenAICompatibleProvider("Alpha")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+	if data, _ := os.ReadFile(authPath); string(data) != "corrupt" {
+		t.Fatalf("corrupt auth.json was overwritten: %q", data)
+	}
+}

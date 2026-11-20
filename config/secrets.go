@@ -444,7 +444,42 @@ func collapseConfigSecrets(src Config, auth map[string]string, frozen bool) (Con
 
 	collapseMCPServers(out.MCPServers, raw, c)
 
+	// A field that disappeared from the config (a removed provider or MCP
+	// server, a renamed provider) never reaches collapseField, so its secret
+	// would stay in auth.json forever. Drop what nothing references anymore.
+	if !frozen && pruneOrphanedSecrets(raw, out, auth) {
+		changed = true
+	}
+
 	return out, auth, changed
+}
+
+// generatedVarPrefix marks the variable names this program generates itself
+// (see collapseState.move). Only those are pruned: a ${VAR} the user wrote by
+// hand may be shared with plugins or other tools, so it is never deleted.
+const generatedVarPrefix = "FYC_"
+
+// pruneOrphanedSecrets deletes from auth every generated variable that prev
+// (the expressions captured at load / last save) referenced and that out no
+// longer references. It reports whether auth changed. Variables that were never
+// referenced by a secret field (MCP OAuth tokens, plugin secrets, entries added
+// by hand) are not in prev and therefore never touched.
+func pruneOrphanedSecrets(prev map[string]string, out Config, auth map[string]string) bool {
+	still := referencedVarNames(captureRawSecrets(out))
+	changed := false
+	for _, expr := range prev {
+		for _, m := range secretPlaceholderRe.FindAllStringSubmatch(expr, -1) {
+			name := m[1]
+			if !strings.HasPrefix(name, generatedVarPrefix) || still[name] {
+				continue
+			}
+			if _, ok := auth[name]; ok {
+				delete(auth, name)
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func collapseProviderKeys(list []OpenAICompatibleProviderConfig, rawPrefix, varPrefix string, raw map[string]string, c *collapseState) {
