@@ -36,7 +36,7 @@ func WithMouseButtons(model tea.Model) tea.Model {
 		return model
 	}
 	switch model.(type) {
-	case SelectorModel, MultiSelectModel, cliSettingsModel, hooksSettingsModel, statusHookSettingsModel, textPromptModel, TextViewerModel, DiffViewerModel:
+	case SelectorModel, MultiSelectModel, cliSettingsModel, hooksSettingsModel, statusHookSettingsModel, textPromptModel, numberPickerModel, TextViewerModel, DiffViewerModel:
 		return mouseButtons{model: model, frame: &buttonFrame{}}
 	}
 	return model
@@ -239,6 +239,22 @@ func (m mouseButtons) View() string {
 		}
 	case textPromptModel:
 		confirm = true
+	case numberPickerModel:
+		confirm = true
+		// The arrows are the whole control: click them exactly where they were
+		// drawn, so a wide value cannot leave a target under the wrong glyph.
+		for row, line := range rows {
+			plain := ansi.Strip(line)
+			for _, arrow := range []struct {
+				label string
+				key   tea.KeyType
+			}{{"◀", tea.KeyLeft}, {"▶", tea.KeyRight}} {
+				if pos := strings.Index(plain, arrow.label); pos >= 0 {
+					col := ansi.StringWidth(plain[:pos])
+					m.frame.targets = append(m.frame.targets, mouseButton{row, col, col + 1, 0, arrow.key})
+				}
+			}
+		}
 	}
 	// Explicit action buttons avoid turning explanatory text into an approval.
 	footer := "  [Cancel]"

@@ -259,6 +259,21 @@ var configMigrations = store.Migrations{
 		doc["schema"] = json.RawMessage(strconv.Itoa(14))
 		return json.Marshal(doc)
 	},
+	14: func(data []byte) ([]byte, error) {
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
+		// v15 retires the configurable sub-agent iteration cap: the budget has
+		// no ceiling any more, so the key would only pretend otherwise. Drop it
+		// so a stale value cannot look like it is still in force.
+		delete(doc, "subagent_max_iterations")
+		doc["schema"] = json.RawMessage(strconv.Itoa(15))
+		return json.Marshal(doc)
+	},
 }
 
 // Load reads config.json into the in-memory configuration, ignoring errors.

@@ -20,6 +20,7 @@ func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalI
 		return "error: agents argument must be a non-empty array"
 	}
 
+	budget := config.Get()
 	var agents []SubagentConfig
 	for i, raw := range rawAgents {
 		agent, ok := raw.(map[string]interface{})
@@ -44,15 +45,9 @@ func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalI
 		}
 
 		allowedTools := extractStringList(agent, "tools")
-		maxIter := 10
+		maxIter := budget.SubagentDefaultIterationCount()
 		if maxIterRaw, ok := agent["max_iterations"].(float64); ok {
-			maxIter = int(maxIterRaw)
-			if maxIter < 1 {
-				maxIter = 1
-			}
-			if maxIter > 50 {
-				maxIter = 50
-			}
+			maxIter = config.ClampSubagentIterations(int(maxIterRaw))
 		}
 
 		agents = append(agents, SubagentConfig{

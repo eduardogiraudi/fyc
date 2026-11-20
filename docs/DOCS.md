@@ -397,6 +397,12 @@ By default a sub-agent runs on the model active in the chat. A **profile** pins 
 - **Stickiness:** once a model of the chain answers, the rest of that sub-agent's requests start from it, so a failing primary is not retried on every iteration. When the model changes, earlier reasoning content and signatures are dropped from the sub-agent's history, since they are only valid for the model that produced them. The final result carries a short note saying which model failed and which one finished.
 - **Never writes the configuration:** profiles build providers from the entries' own credentials through the same path as the chat and the compactor. Switching with `/models` does not change profiles, and a profile never changes the active provider.
 
+### Sub-agent budget
+
+A sub-agent has an iteration budget and a wall-clock deadline. Defaults: 250 iterations unless `max_iterations` is passed in `spawn_subagents`, and 20 minutes. They are set with `subagent_default_iterations` (`0` = default) and `subagent_timeout_seconds` (minimum 30 s, `0` = default), or under **CLI Settings → Sub-agent Profiles → Limits**, where each value is a numeric field adjusted with ◀/▶ (PgUp/PgDn jump ten steps, `↵` confirms) instead of a text field. **There is no upper bound on either budget**: a hard task may legitimately need far more iterations, and the deadline is what actually stops an agent that goes nowhere.
+
+Running out of budget never discards the work done. When the iterations or the time run out, one last request **without tool use** asks the model to report what it completed and what remains, and the main agent receives that as a `Status: partial` result introduced by a `⚠ Sub-agent stopped early` line. If that request fails too, the main agent gets a deterministic digest instead: the steps that ran (up to the last 40) and the sub-agent's last message. The same digest is appended when a model error ends a sub-agent after some tools already ran. The wrap-up has its own 90 s deadline; a user interruption (ctrl+c) never triggers it.
+
 ## Auto-compaction
 
 Long sessions can grow past the model's context window. Auto-compaction summarizes the conversation into a structured handoff. By default it runs only before the first model request of each user turn, preserving the historical replacement format (system prompt, summary and acknowledgement).
@@ -749,6 +755,8 @@ curl -N http://127.0.0.1:8787/ \
 | `config/system_prompt.go` | Editable base system prompt: `SYSTEM_PROMPT.txt` storage and `${VAR}` rendering (environment variables only, no shell). |
 | `config/agentsmd.go` | AGENTS.md settings: enable flag, byte budget, and fallback filenames (with defaults). |
 | `config/subagent_profiles.go` | Sub-agent profiles (`subagent_profiles`, `subagent_default_profile`, `subagent_on_failure`): resolution of the ordered model chain (profile, fallbacks, active model) on top of `ResolveSelection`. |
+| `config/subagent_limits.go` | Sub-agent iteration and time budget (`subagent_default_iterations`, `subagent_timeout_seconds`): defaults and the fixed hard iteration bound. |
+| `tools/subagent_partial.go` | Partial result of a sub-agent that ran out of budget: the wrap-up request without tool use, and the deterministic digest used when it fails. |
 | `subagent_provider.go` | Wires `tools.SubagentProviderFactory` to `newProvider` and lists the configured profiles in the `spawn_subagents` definition. |
 | `config/compaction_model.go` | Compaction model selection (`compaction_model`) and failure policy (`compaction_on_failure`): provider-kind resolution against the live provider lists, “current” as the default, UI labels, and the per-provider reasoning key used by the compactor. |
 | `config/lsp.go` | LSP discovery overrides: search paths, per-server binaries, and the disabled list (accessed via `config.Get().LSP`). |

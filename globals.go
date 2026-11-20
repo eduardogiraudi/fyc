@@ -971,7 +971,7 @@ Rules: always take a "screenshot" first; all coordinates (x, y, x2, y2) must be 
 								"subdirectory":   {Type: "string", Description: "Working directory path for this agent, relative to the current root. The directory must exist."},
 								"instructions":   {Type: "string", Description: "Task instructions for this agent"},
 								"tools":          {Type: "array", Description: "List of tool names this agent can use", Items: &types.ToolProperty{Type: "string"}},
-								"max_iterations": {Type: "number", Description: "Max iterations before the agent stops. Default: 10"},
+								"max_iterations": {Type: "number", Description: "Max iterations before the agent stops and reports a partial result. Omit to use the configured default (250); there is no upper limit, but the time limit still applies."},
 								"profile":        {Type: "string", Description: "Optional name of a configured sub-agent profile (selects the model/provider for this agent). Omit to use the default."},
 							},
 							Required: []string{"id", "subdirectory", "instructions"},

@@ -177,6 +177,13 @@ func SetSubagentOnFailure(p CompactionFailurePolicy) {
 	config.SubagentOnFailure = string(p)
 }
 
+// SetSubagentLimits stores the sub-agent budget. A zero value restores the
+// default of that limit; the iteration budget has no ceiling to store.
+func SetSubagentLimits(defaultIterations, timeoutSeconds int) {
+	config.SubagentDefaultIterations = defaultIterations
+	config.SubagentTimeoutSeconds = timeoutSeconds
+}
+
 // SetPreToolHook sets the pre-tool execution hook.
 func SetPreToolHook(enabled bool, command string) {
 	config.Hooks.PreTool = ToolHook{Enabled: enabled, Command: command}

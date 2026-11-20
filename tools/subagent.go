@@ -207,7 +207,9 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 	// 5. Determine max iterations
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
-		maxIter = 10
+		maxIter = config.Get().SubagentDefaultIterationCount()
+	} else {
+		maxIter = config.ClampSubagentIterations(maxIter)
 	}
 
 	// 6. Resolve the model chain: the profile's model, its fallbacks, then the
@@ -243,11 +245,25 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 	allowedToolDefs := FilterToolsForSubagent(globalSubagentTools, cfg.AllowedTools)
 
 	// 9. Run the tool-call loop
-	ctx, cancel := context.WithTimeout(logger.WithAgent(parentCtx, "subagent", cfg.ID), 5*time.Minute)
-	defer cancel()
+	// agentCtx outlives the sub-agent's own deadline: the wrap-up request that
+	// reports partial work after a timeout needs a live context.
+	agentCtx := logger.WithAgent(parentCtx, "subagent", cfg.ID)
+	subTimeout := cfgSnapshot.SubagentTimeout()
 	sink := progressSink
 	if sink == nil {
 		sink = providers.NewSilentOutputSink()
+	}
+	ctx, cancel := context.WithTimeout(agentCtx, subTimeout)
+	defer cancel()
+	// timedOut tells the sub-agent's own deadline apart from the user's
+	// interruption: only the former is a budget the sub-agent can report on.
+	timedOut := func() bool {
+		return parentCtx.Err() == nil && ctx.Err() == context.DeadlineExceeded
+	}
+	var progress []string
+	lastContent := ""
+	stop := func(reason string) string {
+		return subagentStopped(agentCtx, cfgSnapshot, chain, cur, sysPrompt, subHistory, allowedToolDefs, sink, reason, progress, lastContent) + fallbackNote
 	}
 
 	for iter := 0; iter < maxIter; iter++ {
@@ -261,11 +277,20 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 			fallbackNote = fmt.Sprintf("\n\n(note: %s failed: %v; continued with %s)", failed[0].Model, failed[0].Err, chain[used].Label())
 		}
 		if err != nil {
-			return fmt.Sprintf("subagent error: %v", subagentFailure(failed, skipped))
+			if timedOut() {
+				return stop(fmt.Sprintf("reached the time limit (%s)", subTimeout))
+			}
+			return fmt.Sprintf("subagent error: %v", subagentFailure(failed, skipped)) + subagentDigest(progress, lastContent)
 		}
 
 		if result.Interrupted {
+			if timedOut() {
+				return stop(fmt.Sprintf("reached the time limit (%s)", subTimeout))
+			}
 			return "subagent interrupted"
+		}
+		if result.Content != "" {
+			lastContent = result.Content
 		}
 
 		// Append assistant response to sub-history. The reasoning signature is
@@ -314,6 +339,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 				doneLabel = lbl.Failed
 			}
 			sink.WriteToolOutput(doneLabel, res.Text)
+			progress = append(progress, doneLabel)
 			subHistory = append(subHistory, types.Message{
 				Role:       "tool",
 				Name:       tc.Function.Name,
@@ -323,7 +349,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 		}
 	}
 
-	return "subagent reached maximum iterations without completing"
+	return stop(fmt.Sprintf("reached the iteration limit (%d)", maxIter))
 }
 
 // RunSubagents spawns multiple sub-agents concurrently and returns an

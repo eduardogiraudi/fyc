@@ -22,7 +22,7 @@ func manageSubagentProfiles() {
 		for _, name := range names {
 			options = append(options, name+"  →  "+selectionLabel(cfg, cfg.SubagentProfiles[name].Selection()))
 		}
-		options = append(options, "+ Add profile", "Set the default profile", "Change the failure policy", "← Back")
+		options = append(options, "+ Add profile", "Set the default profile", "Change the failure policy", "Limits (iterations, timeout)", "← Back")
 		idx := ui.SelectOptionWithStyledTitle(
 			ui.SelectorHeader.Render("▸  Sub-agent Profiles")+"\n"+
 				ui.InfoStyle.Render("  Default: "+def+"\n"+
@@ -38,6 +38,8 @@ func manageSubagentProfiles() {
 			selectDefaultSubagentProfile()
 		case idx == len(names)+2:
 			selectSubagentFailurePolicy()
+		case idx == len(names)+3:
+			manageSubagentLimits()
 		default:
 			return
 		}
@@ -202,4 +204,44 @@ func subagentPolicyLabel(p CompactionFailurePolicy) string {
 		return "fail the sub-agent"
 	}
 	return "retry with the active model"
+}
+
+// Sub-agent budget steps. The limits are picked with a numeric field (◀/▶), so
+// there is no list of values to keep in sync with the code and no ceiling to
+// hit: a user with a hard task can always go further.
+const (
+	subagentIterationStep = 10
+	subagentTimeoutStep   = 5 // minutes
+)
+
+// manageSubagentLimits edits the sub-agent budget with the arrow-key pickers.
+// Choosing the built-in value stores nothing, so config.json only carries a
+// number the user actually changed.
+func manageSubagentLimits() {
+	cfg := Get()
+	iters, ok := ui.NumberPicker("Default iterations per sub-agent",
+		cfg.SubagentDefaultIterationCount(), subagentIterationStep, 1, "iterations")
+	if !ok {
+		return
+	}
+	minutes, ok := ui.NumberPicker("Time limit per sub-agent",
+		int(cfg.SubagentTimeout().Minutes()), subagentTimeoutStep, 1, "minutes")
+	if !ok {
+		return
+	}
+	if iters == DefaultSubagentIterations {
+		iters = 0
+	}
+	timeout := minutes * 60
+	if timeout == DefaultSubagentTimeoutSeconds {
+		timeout = 0
+	}
+	SetSubagentLimits(iters, timeout)
+	if err := SaveE(); err != nil {
+		fmt.Println(ui.ErrorStyle.Render("Could not save sub-agent limits: " + err.Error()))
+		return
+	}
+	next := Get()
+	fmt.Println(ui.OkStyle.Render(fmt.Sprintf("Sub-agent limits: %d iterations, %s time limit",
+		next.SubagentDefaultIterationCount(), next.SubagentTimeout())))
 }

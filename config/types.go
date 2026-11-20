@@ -193,6 +193,13 @@ type Config struct {
 	// SubagentDefaultProfile is used by sub-agents spawned without a profile.
 	// Empty means "the active model".
 	SubagentDefaultProfile string `json:"subagent_default_profile,omitempty"`
+	// Sub-agent budget. Zero values use the defaults (see
+	// config/subagent_limits.go): 250 iterations unless the agent asks for
+	// another number, and a 20 minute deadline per sub-agent. Only floors exist
+	// (1 iteration, 30 s): neither budget has a ceiling.
+	// 20 minute deadline per sub-agent.
+	SubagentDefaultIterations int `json:"subagent_default_iterations,omitempty"`
+	SubagentTimeoutSeconds    int `json:"subagent_timeout_seconds,omitempty"`
 	// SubagentOnFailure is the failure policy once a profile's own models have
 	// all failed: "fallback_current" (default) or "abort".
 	SubagentOnFailure string `json:"subagent_on_failure,omitempty"`
@@ -232,7 +239,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 14
+const CurrentSchemaVersion = 15
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.
