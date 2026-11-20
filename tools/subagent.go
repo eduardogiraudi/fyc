@@ -140,12 +140,26 @@ func RunSubagent(parentCtx context.Context, cfg SubagentConfig, parentIgnore *Ig
 	if err != nil {
 		return fmt.Sprintf("subagent error: cannot resolve subdirectory: %v", err)
 	}
-	if !strings.HasPrefix(absSubdir, parentRoot) {
+	// The separator matters: a bare prefix test would accept "/w2" for a "w"
+	// root, i.e. a different directory that merely shares the name.
+	rootAbs, err := filepath.Abs(parentRoot)
+	if err != nil {
+		return fmt.Sprintf("subagent error: cannot resolve the restricted root: %v", err)
+	}
+	if absSubdir != rootAbs && !strings.HasPrefix(absSubdir, rootAbs+string(filepath.Separator)) {
 		return fmt.Sprintf("subagent error: subdirectory %s is outside the restricted root", cfg.Subdirectory)
 	}
 	if fi, stErr := os.Stat(absSubdir); stErr != nil || !fi.IsDir() {
 		return fmt.Sprintf("subagent error: subdirectory %s does not exist or is not a directory", cfg.Subdirectory)
 	}
+	// os.Stat follows symlinks and absSubdir becomes the tools' restricted root:
+	// a link inside the workspace (e.g. "logs -> /var/log") would re-root the
+	// sub-agent outside it.
+	resolved, err := realPathWithinRoot(absSubdir, rootAbs)
+	if err != nil {
+		return fmt.Sprintf("subagent error: subdirectory %s resolves outside the restricted root: %v", cfg.Subdirectory, err)
+	}
+	absSubdir = resolved
 
 	// 2. Build sub-agent's ignore manager (parent + any local ignore files)
 	subIgnore := buildSubagentIgnore(parentIgnore, absSubdir)

@@ -55,14 +55,15 @@ func TestReasoningBlockWithoutTextHasNoControl(t *testing.T) {
 	}
 }
 
-// The pointer lifts the summary row from grey to white, and only that row.
+// The summary row wears the inline REPL's ❖ colours; the pointer lifts it to
+// white, and only that row.
 func TestReasoningBlockHighlightTurnsTheSummaryWhite(t *testing.T) {
 	forceTrueColor(t)
 	block := NewReasoningBlock("reasoned for 1.2s", "a thought")
 	rows, controls := block.Rows(80)
 	idle := rows[controls[0].Row]
-	if !strings.Contains(idle, "\x1b[38;5;240m") {
-		t.Fatalf("the summary row is not grey: %q", idle)
+	if !strings.Contains(idle, "\x1b[38;2;252;131;3m❖") || !strings.Contains(idle, "\x1b[38;5;250mreasoned for 1.2s") {
+		t.Fatalf("the summary row is not drawn with the REPL's ❖ colours: %q", idle)
 	}
 	if !block.SetHover(controls[0].ID) {
 		t.Fatal("hovering the summary changed nothing")

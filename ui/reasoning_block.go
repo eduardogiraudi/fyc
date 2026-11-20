@@ -83,25 +83,32 @@ func (r *ReasoningBlock) Rows(width int) ([]string, []BlockControl) {
 
 	type reasoningRow struct {
 		text string
+		// plain is the same text without styles: a hovered control is drawn with
+		// one style, so its own colours must not survive under the hover colour.
+		plain string
 		// control marks a clickable row: it is drawn with one style, so the
 		// pointer can turn its grey text white.
 		control bool
 		id      int
 	}
+	// The summary is the inline REPL's ❖ line: a finished trace must read the
+	// same in both front-ends.
+	summary := fmt.Sprintf("%s %s", OkStyle.Render("❖"), InfoStyle.Render(label))
 	var body []reasoningRow
 	switch {
 	case !r.expanded && strings.TrimSpace(trace) == "":
 		// Nothing to unfold (the provider sent no visible trace): the summary
 		// stays, without advertising a click that would reveal nothing.
-		body = append(body, reasoningRow{text: fmt.Sprintf("❖ %s", label)})
+		body = append(body, reasoningRow{text: summary})
 	case !r.expanded:
 		body = append(body, reasoningRow{
-			text:    fmt.Sprintf("❖ %s · click to expand", label),
+			text:    summary + GrayStyle.Render(" · click to expand"),
+			plain:   fmt.Sprintf("❖ %s · click to expand", label),
 			control: true,
 			id:      ControlExpandResult,
 		})
 	default:
-		body = append(body, reasoningRow{text: fmt.Sprintf("%s %s", OkStyle.Render("❖"), InfoStyle.Render(label))})
+		body = append(body, reasoningRow{text: summary})
 		for _, line := range strings.Split(trace, "\n") {
 			for _, wrapped := range wrapPlainByANSIWidth(expandTabs(line, tabStopWidth), contentWidth) {
 				if strings.TrimSpace(wrapped) == "" {
@@ -112,7 +119,8 @@ func (r *ReasoningBlock) Rows(width int) ([]string, []BlockControl) {
 			}
 		}
 		body = append(body, reasoningRow{
-			text:    "╰ ⋯ hide reasoning",
+			text:    GrayStyle.Render("╰ ⋯ hide reasoning"),
+			plain:   "╰ ⋯ hide reasoning",
 			control: true,
 			id:      ControlCollapseResult,
 		})
@@ -121,12 +129,13 @@ func (r *ReasoningBlock) Rows(width int) ([]string, []BlockControl) {
 	out := make([]string, 0, len(body))
 	var controls []BlockControl
 	for _, row := range body {
-		switch {
-		case row.control && r.hovered && r.hoveredID == row.id:
-			out = append(out, ToolControlHoverStyle.Render(row.text))
-		case row.control:
-			out = append(out, GrayStyle.Render(row.text))
-		default:
+		if row.control && r.hovered && r.hoveredID == row.id {
+			plain := row.plain
+			if plain == "" {
+				plain = stripControlSequences(row.text)
+			}
+			out = append(out, ToolControlHoverStyle.Render(plain))
+		} else {
 			out = append(out, row.text)
 		}
 		if row.control {
