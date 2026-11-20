@@ -14,5 +14,8 @@ func TestTipsModeBadgeHintOnlyInAltScreen(t *testing.T) {
 		if !strings.Contains(got, "ctrl+o") || !strings.Contains(got, "/auto") || !strings.Contains(got, "to enable/disable auto mode") {
 			t.Fatalf("keyboard and command hints must remain visible: %s", got)
 		}
+		if !strings.Contains(got, "ctrl+r to search the history") {
+			t.Fatalf("reverse history search hint must be visible: %s", got)
+		}
 	}
 }

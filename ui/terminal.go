@@ -208,7 +208,8 @@ func TipsBlock(altScreen bool) string {
 		modeHint = "ctrl+o, /auto or a click on the mode badge"
 	}
 	return TipStyle.Render("Type /help for commands  •  exit to quit  •  enter to send  •  /sub on to enable subagents spawning") + "\n" +
-		TipStyle.Render(modeHint+" to enable/disable auto mode")
+		TipStyle.Render(modeHint+" to enable/disable auto mode") + "\n" +
+		TipStyle.Render("ctrl+r to search the history")
 }
 
 // StartupHeaderBlock returns the start-up banner rendered for the current
