@@ -166,15 +166,17 @@ func TestInputBarIsSelectable(t *testing.T) {
 	if !m.hit.inputOK || row < 0 {
 		t.Fatalf("the input is not where the frame says it is (row %d, ok %v)", row, m.hit.inputOK)
 	}
-	// "❯ " is two cells of the row, so column 2 is the first typed rune.
-	next, _ = m.Update(press(2, row))
+	// The typed text starts after the prompt gutter (the "❯ " and, inside a
+	// checkout, the branch it shows), so that column is the first typed rune.
+	gutter := inputGutter(t, m)
+	next, _ = m.Update(press(gutter, row))
 	m = next.(chatModel)
-	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion, X: 6, Y: row})
+	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion, X: gutter + 4, Y: row})
 	m = next.(chatModel)
 	if !strings.Contains(m.inputView(), "\x1b[7m") {
 		t.Fatalf("the dragged text is not highlighted: %q", m.inputView())
 	}
-	next, cmd := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: 6, Y: row})
+	next, cmd := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: gutter + 4, Y: row})
 	m = next.(chatModel)
 
 	msg := runMsgs(cmd)
@@ -214,7 +216,7 @@ func TestInputSelectionStaysOnTheInputBar(t *testing.T) {
 		t.Fatal("a press on the transcript selected nothing")
 	}
 
-	next, _ = m.Update(press(2, m.hit.inputRow))
+	next, _ = m.Update(press(inputGutter(t, m), m.hit.inputRow))
 	m = next.(chatModel)
 	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion, X: 20, Y: 0})
 	m = next.(chatModel)
