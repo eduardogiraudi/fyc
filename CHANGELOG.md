@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-11-20
+
+### Added
+
+- add /usage command (`0c3822b`).
+- subagents: add named model profiles with fallback chain (`9bfb3d2`).
+- subagents: configure the budget with arrow-key pickers and no ceiling (`af4030b`).
+- config: enable the alt-screen chat UI by default (`405577b`).
+- ui: hint ctrl+r history search in start-up tips (`54fc2a3`).
+- chat: run display/behaviour commands while the model generates (`6bb5009`).
+- chat: select and copy the input bar text in the alt-screen TUI (`6bb5009`).
+- tui: expandable reasoning trace, full patch diff, prompt-free input copy (`1de562b`).
+
+### Fixed
+
+- config: prune auth.json secrets of removed providers (`9d23ba1`).
+- ui: draw in-progress output in the alt-screen transcript instead of pinning it above the input (`0c3bf44`).
+- tui: the input bar copy no longer carries the ❯ prompt and the alignment padding (`1de562b`).
+- tools: keep sub-agent roots inside the workspace (`ee1fbe1`).
+- mcp: keep MCP sessions alive past their setup context (`9d0c54d`).
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
