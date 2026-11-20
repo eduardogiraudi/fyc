@@ -292,7 +292,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case tea.MouseActionMotion:
 					m.inputSel.extend(m.inputRowNear(msg.Y), msg.X)
 				case tea.MouseActionRelease:
-					text := m.inputSel.text(m.inputRows())
+					rows, gutters := m.inputRows()
+					text := m.inputSel.text(rows, gutters)
 					m.inputSel.clear()
 					if text != "" {
 						cmds = append(cmds, copySelectionCmd(text))
@@ -719,23 +720,20 @@ func (m chatModel) bottomPartsIndexed() ([]string, int) {
 
 // inputView draws the input bar, painting the drag selection over the rows it
 // covers. The selection is anchored in the rendered rows, so it is applied to
-// the same rendering the user dragged over.
+// the same rendering the user dragged over, prompt gutter included.
 func (m chatModel) inputView() string {
-	view := m.input.View()
+	rows, gutters := m.input.ViewRows()
 	if !m.inputSel.active {
-		return view
+		return strings.Join(rows, "\n")
 	}
-	return strings.Join(m.inputSel.highlight(splitRows(view)), "\n")
+	return strings.Join(m.inputSel.highlight(rows, gutters), "\n")
 }
 
-// inputRows is the input bar split into the rows it drew: the coordinates of an
-// input selection are rows of this rendering.
-func (m chatModel) inputRows() []string {
-	return splitRows(m.input.View())
-}
-
-func splitRows(view string) []string {
-	return strings.Split(strings.TrimRight(view, "\n"), "\n")
+// inputRows is the input bar split into the rows it drew, with the prompt
+// gutter of each: the coordinates of an input selection are rows of this
+// rendering.
+func (m chatModel) inputRows() ([]string, []int) {
+	return m.input.ViewRows()
 }
 
 // inputRowAt maps a screen row of the last frame to the row index of the input
@@ -758,7 +756,8 @@ func (m chatModel) inputRowNear(y int) int {
 		return 0
 	}
 	row := y - m.hit.inputRow
-	if last := len(m.inputRows()) - 1; row > last {
+	rows, _ := m.inputRows()
+	if last := len(rows) - 1; row > last {
 		row = last
 	}
 	if row < 0 {
@@ -1085,9 +1084,16 @@ func (m *chatModel) flushTextCmd() tea.Cmd {
 	return m.printCmd(strings.TrimRight(rendered, "\n"))
 }
 
+// finishReasoningCmd closes the reasoning trace. The alt-screen transcript keeps
+// it as a block the user unfolds with a click; the inline REPL, which has no
+// clickable rows, prints the summary only.
 func (m *chatModel) finishReasoningCmd() tea.Cmd {
-	label := m.reasoning.Finish()
+	label, trace := m.reasoning.FinishTrace()
 	if label == "" {
+		return nil
+	}
+	if m.transcript != nil {
+		m.transcript.AppendExpandable(ui.NewReasoningBlock(label, trace))
 		return nil
 	}
 	return m.printCmd(fmt.Sprintf("%s %s", ui.OkStyle.Render("❖"), ui.InfoStyle.Render(label)))

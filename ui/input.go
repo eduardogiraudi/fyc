@@ -963,10 +963,30 @@ func RenderSubmittedPrompt(input string) string {
 }
 
 func (m inputModel) View() string {
-	if m.searchActive {
-		return m.historySearchView()
+	rows, _ := m.viewRows()
+	if len(rows) == 0 {
+		return ""
 	}
-	var b strings.Builder
+	return strings.Join(rows, "\n") + "\n"
+}
+
+// ViewRows is View split into the rows it drew, each with the number of leading
+// columns that are prompt decoration rather than typed text: the "❯ " prompt and
+// the padding that keeps wrapped lines aligned under it. A drag selection copies
+// the text, so it must skip them (see rowsSelection).
+func (m inputModel) ViewRows() ([]string, []int) { return m.viewRows() }
+
+// viewRows draws the input bar row by row and reports the prompt gutter of every
+// row: the prompt prefix on the first row, its width in spaces on the wrapped
+// ones.
+func (m inputModel) viewRows() (rows []string, gutters []int) {
+	if m.searchActive {
+		for _, row := range strings.Split(strings.TrimRight(m.historySearchView(), "\n"), "\n") {
+			rows = append(rows, row)
+			gutters = append(gutters, 0)
+		}
+		return rows, gutters
+	}
 
 	// Build prompt prefix: show git branch if available
 	promptPrefix := m.promptPrefix()
@@ -983,6 +1003,7 @@ func (m inputModel) View() string {
 		wrappedLines, cursorVisualRow, cursorVisualCol := wrapLine(line, m.col, availableWidth, r == m.row)
 
 		for wr, wrappedLine := range wrappedLines {
+			var b strings.Builder
 			// Only show prompt on the first visual line of each logical line
 			if r == 0 && wr == 0 {
 				b.WriteString(inputPromptStyle.Render(promptPrefix))
@@ -1014,7 +1035,8 @@ func (m inputModel) View() string {
 			} else {
 				b.WriteString(inputTextStyle.Render(wrappedLine))
 			}
-			b.WriteString("\n")
+			rows = append(rows, b.String())
+			gutters = append(gutters, promptWidth)
 		}
 	}
 
@@ -1025,7 +1047,8 @@ func (m inputModel) View() string {
 		if len(m.suggestions) > maxVisibleSuggestions {
 			header += fmt.Sprintf(" · ↑ %d hidden · ↓ %d hidden", m.suggOffset, len(m.suggestions)-end)
 		}
-		b.WriteString(DimStyle.Render(header) + "\n")
+		rows = append(rows, DimStyle.Render(header))
+		gutters = append(gutters, 0)
 		for i := m.suggOffset; i < end; i++ {
 			s := m.suggestions[i]
 			name := OkStyle.Render(s.Name)
@@ -1034,19 +1057,22 @@ func (m inputModel) View() string {
 			} else if m.hovered && i == m.hoverIdx {
 				name = HoverStyle.Render(s.Name)
 			}
-			b.WriteString(fmt.Sprintf("%s %s  %s\n",
+			rows = append(rows, fmt.Sprintf("%s %s  %s",
 				DimStyle.Render("│"),
 				name,
 				InfoStyle.Render(s.Description),
 			))
+			gutters = append(gutters, 0)
 		}
 		if m.suggExtra != "" {
-			b.WriteString(fmt.Sprintf("%s %s\n", DimStyle.Render("│"), TipStyle.Render(m.suggExtra)))
+			rows = append(rows, fmt.Sprintf("%s %s", DimStyle.Render("│"), TipStyle.Render(m.suggExtra)))
+			gutters = append(gutters, 0)
 		}
-		b.WriteString(DimStyle.Render("╰─ ↑/↓ navigate · enter to select · tab to complete") + "\n")
+		rows = append(rows, DimStyle.Render("╰─ ↑/↓ navigate · enter to select · tab to complete"))
+		gutters = append(gutters, 0)
 	}
 
-	return b.String()
+	return rows, gutters
 }
 
 // ── InputArea — public API ────────────────────────────────────────────────────

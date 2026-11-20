@@ -112,6 +112,21 @@ func (t *transcriptState) AppendTool(tool *ui.ToolOutput) {
 	t.appendExpandable(rows, controls, tool)
 }
 
+// AppendExpandable adds any other block the alt-screen chat expands in place (a
+// finished reasoning trace): its control rows are clickable exactly like a tool
+// result's.
+func (t *transcriptState) AppendExpandable(e expandable) {
+	if e == nil {
+		return
+	}
+	width := t.width
+	if width <= 0 {
+		width = 80
+	}
+	rows, controls := e.Rows(width)
+	t.appendExpandable(rows, controls, e)
+}
+
 func (t *transcriptState) appendExpandable(rows []string, controls []ui.BlockControl, e expandable) {
 	if len(rows) == 0 {
 		return

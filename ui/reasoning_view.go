@@ -66,13 +66,17 @@ func (r *ReasoningView) Tick() tea.Cmd {
 	return ReasoningTickCmd()
 }
 
-func (r *ReasoningView) Finish() string {
+// FinishTrace stops the reasoning and returns its "reasoned for Xs" label
+// together with the text it accumulated, so the chat can keep the trace as an
+// expandable block instead of throwing it away.
+func (r *ReasoningView) FinishTrace() (label, text string) {
 	if !r.tracker.Active() {
-		return ""
+		return "", ""
 	}
-	label := r.tracker.Finish()
+	text = r.tracker.Text()
+	label = r.tracker.Finish()
 	r.Clear()
-	return label
+	return label, text
 }
 
 func (r *ReasoningView) Clear() {

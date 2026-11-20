@@ -39,7 +39,9 @@ func (s *rowsSelection) extend(row, col int) {
 func (s *rowsSelection) clear() { s.active = false }
 
 // highlight paints the covered cells of rows and leaves the others untouched.
-func (s rowsSelection) highlight(rows []string) []string {
+// gutters reports, per row, how many leading cells are prompt decoration: they
+// are never painted, so what the user sees selected is exactly what is copied.
+func (s rowsSelection) highlight(rows []string, gutters []int) []string {
 	if !s.active || s.anchor == s.cursor {
 		return rows
 	}
@@ -51,14 +53,19 @@ func (s rowsSelection) highlight(rows []string) []string {
 			out[i] = line
 			continue
 		}
+		if g := gutterAt(gutters, i); from < g {
+			from = g
+		}
 		out[i] = highlightSpan(line, from, to)
 	}
 	return out
 }
 
 // text is the plain text the selection covers, one line per row and without the
-// trailing padding. A drag that ends where it started covers nothing.
-func (s rowsSelection) text(rows []string) string {
+// trailing padding. The prompt gutter is dropped too: dragging from the left edge
+// must not paste "❯ " into the middle of a sentence. A drag that ends where it
+// started covers nothing.
+func (s rowsSelection) text(rows []string, gutters []int) string {
 	if !s.active || s.anchor == s.cursor {
 		return ""
 	}
@@ -69,6 +76,9 @@ func (s rowsSelection) text(rows []string) string {
 		if !ok {
 			continue
 		}
+		if g := gutterAt(gutters, i); from < g {
+			from = g
+		}
 		out = append(out, selectionRowText(rows[i], from, to))
 	}
 	text := strings.TrimRight(strings.Join(out, "\n"), "\n")
@@ -76,6 +86,15 @@ func (s rowsSelection) text(rows []string) string {
 		return ""
 	}
 	return text
+}
+
+// gutterAt is how many leading cells of row i are prompt decoration (see
+// rowsSelection); a missing or malformed entry means none.
+func gutterAt(gutters []int, i int) int {
+	if i < 0 || i >= len(gutters) || gutters[i] < 0 {
+		return 0
+	}
+	return gutters[i]
 }
 
 // ends returns the selection ordered top-to-bottom, so an upwards drag selects

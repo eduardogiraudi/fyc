@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -45,8 +46,10 @@ func TestReplaceAnchorsDetailOnlyOnSuccess(t *testing.T) {
 	}
 }
 
-// A huge patch is capped: the detail is a hint, not the whole file.
-func TestEditDetailCapsAndSeparatesHunks(t *testing.T) {
+// A huge patch is shown whole — the chat keeps it collapsed until the user
+// clicks, so a cut would hide part of it forever — while distant hunks stay
+// separated by a gap mark and keep their line numbers.
+func TestEditDetailShowsTheWholePatchAndSeparatesHunks(t *testing.T) {
 	var ops []diffOp
 	for i := 0; i < 60; i++ {
 		ops = append(ops, diffOp{diffEqual, "line"})
@@ -55,15 +58,23 @@ func TestEditDetailCapsAndSeparatesHunks(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		ops = append(ops, diffOp{diffEqual, "tail"})
 	}
+	for i := 0; i < 40; i++ {
+		ops = append(ops, diffOp{diffInsert, fmt.Sprintf("added %d", i)})
+	}
 	detail := editDetail(ops)
-	lines := strings.Split(detail, "\n")
 	if !strings.Contains(detail, "- 61 old") || !strings.Contains(detail, "+ 61 new") {
 		t.Fatalf("the change is missing its line numbers: %q", detail)
 	}
 	if !strings.Contains(detail, "  59 line") {
 		t.Fatalf("the context lines lost their numbers: %q", detail)
 	}
-	if len(lines) > editDetailMaxRows+1 {
-		t.Fatalf("detail was not capped: %d rows", len(lines))
+	if !strings.Contains(detail, "⋯") {
+		t.Fatalf("the hunks are not separated by a gap mark: %q", detail)
+	}
+	if !strings.Contains(detail, "added 39") {
+		t.Fatalf("the tail of the patch was cut: %q", detail)
+	}
+	if strings.Contains(detail, "more changed lines") {
+		t.Fatalf("the detail hid part of the patch: %q", detail)
 	}
 }

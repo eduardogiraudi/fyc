@@ -738,11 +738,9 @@ func editOps(r editRange, oldLines, newLines []string) []diffOp {
 }
 
 // editDetailContext is how many unchanged lines surround a change in the UI
-// detail, and editDetailMaxRows caps what a huge patch may print.
-const (
-	editDetailContext = 2
-	editDetailMaxRows = 24
-)
+// detail. The detail is not capped: the chat keeps it collapsed until the user
+// clicks, and then it has to be the whole patch.
+const editDetailContext = 2
 
 // editDetail renders the changed lines of a patch with their line number and a
 // little surrounding context: " 12 context", "-13 removed", "+13 added" (the
@@ -784,9 +782,6 @@ func editDetail(ops []diffOp) string {
 			gap = false
 		}
 		out = append(out, fmt.Sprintf("%c%*d %s", marker, numberWidth, number, op.text))
-	}
-	if len(out) > editDetailMaxRows {
-		out = append(out[:editDetailMaxRows], fmt.Sprintf("… %d more changed lines", len(out)-editDetailMaxRows))
 	}
 	return strings.Join(out, "\n")
 }
