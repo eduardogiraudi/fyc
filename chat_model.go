@@ -556,7 +556,20 @@ func (m chatModel) liveParts() []string {
 // temperature, mode), because the mode badge is clickable in alt-screen mode
 // and its screen row has to be computed. It is -1 when no status line is drawn.
 func (m chatModel) livePartsIndexed() ([]string, int) {
-	statusIdx := -1
+	cur := m.currentOutputParts()
+	rest, statusIdx := m.bottomPartsIndexed()
+	if statusIdx >= 0 {
+		statusIdx += len(cur)
+	}
+	return append(cur, rest...), statusIdx
+}
+
+// currentOutputParts is the output still being produced: reasoning, the
+// subagent panel, spinners, the patch counter and the live text tail. In the
+// inline REPL it is drawn above the status bar; in alt-screen mode it is not
+// pinned to the input but appended to the scrolling transcript, so it never
+// covers the history and never makes the first messages jump from the bottom.
+func (m chatModel) currentOutputParts() []string {
 	var parts []string
 	if m.reasoning.Active() {
 		parts = append(parts, m.reasoning.View())
@@ -583,6 +596,15 @@ func (m chatModel) livePartsIndexed() ([]string, int) {
 		tail := strings.Join(visible, "\n")
 		parts = append(parts, ui.DimStyle.Render(tail))
 	}
+	return parts
+}
+
+// bottomPartsIndexed is what always stays pinned under the output: the
+// generating hint, the status rows and the input (or the open modal). It also
+// reports which part is the status line, or -1.
+func (m chatModel) bottomPartsIndexed() ([]string, int) {
+	statusIdx := -1
+	var parts []string
 
 	// The hint is only true while the input is the thing on screen: an open
 	// modal owns enter and ctrl+c.
@@ -635,7 +657,15 @@ func (m chatModel) providerStatusLine() string {
 // clamped to exactly the terminal height, so the renderer never has to scroll
 // the alt screen (which would shift the whole UI).
 func (m chatModel) altScreenView() string {
-	parts, statusIdx := m.livePartsIndexed()
+	parts, statusIdx := m.bottomPartsIndexed()
+	// The current output (reasoning, tools, streaming text) scrolls with the
+	// transcript instead of being glued to the input bar.
+	var tail []string
+	if cur := m.currentOutputParts(); len(cur) > 0 {
+		if block := ui.ClampBlock(strings.TrimRight(strings.Join(cur, "\n"), "\n"), m.width); block != "" {
+			tail = strings.Split(block, "\n")
+		}
+	}
 	live := ui.ClampBlock(strings.TrimRight(strings.Join(parts, "\n"), "\n"), m.width)
 	liveRows := strings.Split(live, "\n")
 	// Row of the status line inside the live area, computed with the same
@@ -675,7 +705,7 @@ func (m chatModel) altScreenView() string {
 		// Rows were clamped at the width they were rendered with: a terminal
 		// that got narrower would otherwise soft-wrap them and the frame would
 		// no longer match the screen.
-		if body := ui.ClampBlock(m.transcript.View(budget), m.width); body != "" {
+		if body := ui.ClampBlock(m.transcript.ViewWithTail(budget, tail), m.width); body != "" {
 			rows = append(rows, strings.Split(body, "\n")...)
 		}
 	}

@@ -67,6 +67,10 @@ type transcriptState struct {
 	hoverActive  bool
 	hoverBlock   int
 	hoverControl int
+	// tail is the output still in progress (reasoning, tool, live text): it is
+	// drawn after the last completed row and scrolls with it, but is not part
+	// of lines until it completes.
+	tail []string
 }
 
 // cellPos is a position in the transcript: which row, and which column of it.
@@ -231,26 +235,43 @@ func (t *transcriptState) PageSize() int {
 // View returns the rows to draw in a region h rows tall. It also records h, so
 // scrolling clamps against the region the user can actually see.
 func (t *transcriptState) View(h int) string {
+	return t.ViewWithTail(h, nil)
+}
+
+// ViewWithTail is View with the in-progress output appended after the last
+// completed row. The tail scrolls like the rest of the transcript; while the
+// reader is scrolled up its growth is compensated so the rows on screen stay
+// still.
+func (t *transcriptState) ViewWithTail(h int, tail []string) string {
+	if t.offset > 0 {
+		t.offset = max(0, t.offset+len(tail)-len(t.tail))
+	}
+	t.tail = tail
 	t.height = h
 	t.clamp()
-	if h <= 0 || len(t.lines) == 0 {
+	total := len(t.lines) + len(tail)
+	if h <= 0 || total == 0 {
 		return ""
 	}
-	start := len(t.lines) - h - t.offset
+	start := total - h - t.offset
 	if start < 0 {
 		start = 0
 	}
 	t.viewStart = start
 	end := start + h
-	if end > len(t.lines) {
-		end = len(t.lines)
-	}
-	if !t.selActive {
-		return strings.Join(t.lines[start:end], "\n")
+	if end > total {
+		end = total
 	}
 	rows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		rows = append(rows, t.highlighted(i))
+		switch {
+		case i >= len(t.lines):
+			rows = append(rows, tail[i-len(t.lines)])
+		case t.selActive:
+			rows = append(rows, t.highlighted(i))
+		default:
+			rows = append(rows, t.lines[i])
+		}
 	}
 	return strings.Join(rows, "\n")
 }
@@ -259,7 +280,7 @@ func (t *transcriptState) maxOffset() int {
 	if t.height <= 0 {
 		return 0
 	}
-	if m := len(t.lines) - t.height; m > 0 {
+	if m := len(t.lines) + len(t.tail) - t.height; m > 0 {
 		return m
 	}
 	return 0
