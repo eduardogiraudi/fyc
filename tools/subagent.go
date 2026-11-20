@@ -23,6 +23,9 @@ type SubagentConfig struct {
 	AllowedTools  []string // empty = all tools
 	MaxIterations int
 	ID            string // unique identifier for multi-agent scenarios
+	// Profile names a configured sub-agent profile (model/provider chain).
+	// Empty uses the default profile, or the active model when none is set.
+	Profile string
 }
 
 // subagentStream runs one sub-agent sampling request, resending it when it fails
@@ -31,9 +34,100 @@ func subagentStream(provider types.Provider, ctx context.Context, messages []typ
 	return providers.WithStreamResend(providers.WithLogging(provider)).StreamChat(ctx, messages, tools, sink)
 }
 
+// SubagentProviderFactory builds the provider for one model of a sub-agent's
+// chain. It is set from main (see subagent_provider.go) so sub-agents share the
+// single provider construction path of the chat, compaction included: same
+// credentials, base URL and reasoning rules. systemPrompt is the sub-agent's
+// system prompt, for providers that take it out of band.
+var SubagentProviderFactory func(cfg config.Config, choice config.CompactorChoice, systemPrompt string) (types.Provider, error)
+
+// subagentAttempt records one request of a chain that failed.
+type subagentAttempt struct {
+	Model string
+	Err   error
+}
+
+// streamWithChain sends one sampling request, starting at chain[start] and
+// moving to the next model whenever one fails (construction included: a
+// deleted provider entry or a revoked key is a failure like any other). It
+// returns the index of the model that answered. A cancelled parent context
+// stops the chain at once: an interruption is never retried elsewhere.
+func streamWithChain(ctx context.Context, cfg config.Config, chain []config.CompactorChoice, start int, sysPrompt string, history []types.Message, toolDefs []types.Tool, sink types.OutputSink) (*types.StreamResult, int, []subagentAttempt, error) {
+	var failed []subagentAttempt
+	for i := start; i < len(chain); i++ {
+		choice := chain[i]
+		msgs := history
+		if i != start {
+			msgs = stripReasoning(history)
+		}
+		if choice.Kind == config.CompactorGemini {
+			// Gemini takes the system prompt as SystemInstruction.
+			msgs = withoutSystem(msgs)
+		}
+		provider, err := SubagentProviderFactory(cfg, choice, sysPrompt)
+		var result *types.StreamResult
+		if err == nil {
+			result, err = subagentStream(provider, ctx, msgs, toolDefs, sink)
+		}
+		if err == nil {
+			return result, i, failed, nil
+		}
+		failed = append(failed, subagentAttempt{Model: choice.Label(), Err: err})
+		if ctx.Err() != nil {
+			return nil, i, failed, err
+		}
+		sink.Reset()
+	}
+	return nil, len(chain) - 1, failed, failed[len(failed)-1].Err
+}
+
+// stripReasoning returns a copy of history without reasoning content or
+// signatures, which are only valid for the model that produced them.
+func stripReasoning(history []types.Message) []types.Message {
+	out := make([]types.Message, len(history))
+	copy(out, history)
+	for i := range out {
+		out[i].ReasoningContent = ""
+		out[i].ReasoningSignature = ""
+	}
+	return out
+}
+
+func withoutSystem(history []types.Message) []types.Message {
+	out := make([]types.Message, 0, len(history))
+	for _, m := range history {
+		if m.Role != "system" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// subagentFailure renders why no model of the chain answered: every attempt,
+// then the profile entries that could not even be resolved.
+func subagentFailure(failed []subagentAttempt, skipped []error) string {
+	var parts []string
+	for _, a := range failed {
+		parts = append(parts, fmt.Sprintf("%s: %v", a.Model, a.Err))
+	}
+	if len(skipped) > 0 {
+		parts = append(parts, "skipped: "+joinErrors(skipped))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func joinErrors(errs []error) string {
+	parts := make([]string, len(errs))
+	for i, e := range errs {
+		parts[i] = e.Error()
+	}
+	return strings.Join(parts, "; ")
+}
+
 // RunSubagent spawns a sub-agent in the given subdirectory with a custom
 // system prompt and a filtered toolset. It inherits ignore rules from the
-// parent and runs the same provider/model as the main agent.
+// parent. Its model comes from cfg.Profile (a configured model chain with
+// fallbacks) and defaults to the active model of the main agent.
 // progressSink is an optional OutputSink (e.g. *types.SubagentBuffer) for
 // live UI updates; if nil, a SilentOutputSink is used internally.
 func RunSubagent(parentCtx context.Context, cfg SubagentConfig, parentIgnore *IgnoreManager, parentRoot string, mcpManager *mcp.MCPManager, progressSink types.OutputSink) string {
@@ -116,12 +210,25 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 		maxIter = 10
 	}
 
-	// 6. Get provider config
-	cfgProvider := config.Get()
-
-	// Reasoning: same resolution as the main loop — the per-provider override
-	// when the user declared one, else the global preference.
-	subIntent, subOverride := config.ActiveReasoning()
+	// 6. Resolve the model chain: the profile's model, its fallbacks, then the
+	// active model (policy permitting). Without a profile it is just the active
+	// model, as before profiles existed. The configuration is read once so every
+	// request of this sub-agent sees the same chain.
+	cfgSnapshot := config.Get()
+	chain, skipped, chainErr := cfgSnapshot.SubagentChain(cfg.Profile)
+	if chainErr != nil {
+		return "subagent error: " + chainErr.Error()
+	}
+	if len(chain) == 0 {
+		return "subagent error: no usable model: " + joinErrors(skipped)
+	}
+	if SubagentProviderFactory == nil {
+		return "subagent error: no provider factory configured"
+	}
+	// cur is sticky: once a model of the chain worked, later requests of this
+	// sub-agent start from it instead of retrying a model that just failed.
+	cur := 0
+	fallbackNote := ""
 
 	// 7. Build sub-agent chat history
 	subHistory := []types.Message{
@@ -145,119 +252,16 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 
 	for iter := 0; iter < maxIter; iter++ {
 		sink.Reset()
-		// Create provider instance
-		var result *types.StreamResult
-		var err error
-
-		if cfgProvider.Provider == config.ProviderGemini {
-			provider := providers.NewGeminiProvider(cfgProvider.GeminiAPIKey, cfgProvider.Model, cfgProvider.Temperature)
-			provider.SystemInstruction = sysPrompt
-			provider.SetReasoning(subIntent, subOverride)
-
-			// For Gemini, we strip the system message from subHistory since it's in SystemInstruction
-			var geminiHistory []types.Message
-			for _, m := range subHistory {
-				if m.Role != "system" {
-					geminiHistory = append(geminiHistory, m)
-				}
-			}
-			result, err = subagentStream(provider, ctx, geminiHistory, allowedToolDefs, sink)
-		} else if cfgProvider.Provider == config.ProviderAnthropic {
-			// Find active Anthropic provider
-			var activeProvider *config.OpenAICompatibleProviderConfig
-			if cfgProvider.ActiveProviderName != "" {
-				for _, p := range cfgProvider.AnthropicProviders {
-					if p.Name == cfgProvider.ActiveProviderName {
-						activeProvider = &p
-						break
-					}
-				}
-			}
-			if activeProvider == nil {
-				for _, p := range cfgProvider.AnthropicProviders {
-					if p.Model == cfgProvider.Model {
-						activeProvider = &p
-						break
-					}
-				}
-			}
-			if activeProvider == nil {
-				return "subagent error: no active Anthropic provider found"
-			}
-			provider := providers.NewAnthropicProvider(
-				activeProvider.BaseURL,
-				activeProvider.APIKey,
-				activeProvider.Model,
-				activeProvider.Name,
-				cfgProvider.Temperature,
-			)
-			provider.SetReasoning(subIntent, subOverride)
-			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
-		} else if cfgProvider.Provider == config.ProviderCodex {
-			codexToken, tokenErr := config.CodexFreshAccessToken()
-			if tokenErr != nil {
-				return "subagent error: Codex not authenticated"
-			}
-			provider := providers.NewCodexProvider(
-				codexToken,
-				cfgProvider.Model,
-				cfgProvider.Temperature,
-				false,
-				"",
-			)
-			provider.SetReasoning(subIntent, subOverride)
-			provider.Refresh = config.CodexForceRefresh
-			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
-		} else if cfgProvider.Provider == config.ProviderOpenAIResponsesCompatible {
-			var activeProvider *config.OpenAICompatibleProviderConfig
-			for _, p := range cfgProvider.OpenAIResponsesCompatibleProviders {
-				if p.Model == cfgProvider.Model {
-					activeProvider = &p
-					break
-				}
-			}
-			if activeProvider == nil {
-				return "subagent error: no active Responses provider found"
-			}
-			provider := providers.NewOpenAIResponsesCompatibleProvider(
-				activeProvider.BaseURL,
-				activeProvider.APIKey,
-				activeProvider.Model,
-				activeProvider.Name,
-				cfgProvider.Temperature,
-				false,
-				"",
-			)
-			provider.SetReasoning(subIntent, subOverride)
-			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
-		} else {
-			// Find active OpenAI-compatible provider
-			var activeProvider *config.OpenAICompatibleProviderConfig
-			for _, p := range cfgProvider.OpenAICompatibleProviders {
-				if p.Model == cfgProvider.Model {
-					activeProvider = &p
-					break
-				}
-			}
-			if activeProvider == nil {
-				return "subagent error: no active provider found"
-			}
-
-			provider := providers.NewOpenAICompatibleProvider(
-				activeProvider.BaseURL,
-				activeProvider.APIKey,
-				activeProvider.Model,
-				activeProvider.Name,
-				cfgProvider.Temperature,
-				false,
-				"",
-			)
-			provider.SetReasoning(subIntent, subOverride)
-			result, err = subagentStream(provider, ctx, subHistory, allowedToolDefs, sink)
+		result, used, failed, err := streamWithChain(ctx, cfgSnapshot, chain, cur, sysPrompt, subHistory, allowedToolDefs, sink)
+		if err == nil && (used != cur || len(failed) > 0) {
+			// A reasoning signature belongs to the model that produced it: the
+			// next request goes to another one, so earlier thinking is dropped.
+			subHistory = stripReasoning(subHistory)
+			cur = used
+			fallbackNote = fmt.Sprintf("\n\n(note: %s failed: %v; continued with %s)", failed[0].Model, failed[0].Err, chain[used].Label())
 		}
-
 		if err != nil {
-			return fmt.Sprintf("subagent error: %v", err)
+			return fmt.Sprintf("subagent error: %v", subagentFailure(failed, skipped))
 		}
 
 		if result.Interrupted {
@@ -270,7 +274,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 		// Gemini 3 needs its thoughtSignature to keep reasoning continuity
 		// across tool calls.
 		msg := types.Message{Role: "assistant", Content: result.Content, ReasoningContent: result.ReasoningContent}
-		if cfgProvider.Provider == config.ProviderAnthropic || cfgProvider.Provider == config.ProviderGemini {
+		if k := chain[cur].Kind; k == config.CompactorAnthropic || k == config.CompactorGemini {
 			msg.ReasoningSignature = result.ReasoningSignature
 		}
 		if len(result.ToolCalls) > 0 {
@@ -282,7 +286,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 		// If no tool calls, we're done
 		if len(result.ToolCalls) == 0 {
 			if result.Content != "" {
-				return result.Content
+				return result.Content + fallbackNote
 			}
 			return "subagent completed with no output"
 		}

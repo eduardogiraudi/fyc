@@ -187,6 +187,15 @@ type Config struct {
 	// CompactionOnFailure is the failure policy of the compaction request:
 	// "fallback_current" (default) or "abort".
 	CompactionOnFailure string `json:"compaction_on_failure,omitempty"`
+	// SubagentProfiles are named model/provider presets the main agent can pick
+	// per sub-agent (spawn_subagents "profile"). See config/subagent_profiles.go.
+	SubagentProfiles map[string]SubagentProfileConfig `json:"subagent_profiles,omitempty"`
+	// SubagentDefaultProfile is used by sub-agents spawned without a profile.
+	// Empty means "the active model".
+	SubagentDefaultProfile string `json:"subagent_default_profile,omitempty"`
+	// SubagentOnFailure is the failure policy once a profile's own models have
+	// all failed: "fallback_current" (default) or "abort".
+	SubagentOnFailure string `json:"subagent_on_failure,omitempty"`
 	// AGENTS.md project-instruction settings (see config/agentsmd.go and
 	// tools/agentsmd.go). The instruction chain is injected into the system
 	// prompt as a <project_context> block.

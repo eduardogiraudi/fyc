@@ -92,10 +92,18 @@ func (c CompactorChoice) Label() string {
 // through the failure policy, not a panic and not a stale index.
 func (c Config) Compactor() (CompactorChoice, error) {
 	sel := c.CompactionModel
-	kind := CompactorKind(strings.ToLower(strings.TrimSpace(sel.Kind)))
-	if kind == CompactorCurrent {
+	if CompactorKind(strings.ToLower(strings.TrimSpace(sel.Kind))) == CompactorCurrent {
 		return c.ActiveChoice(), nil
 	}
+	return c.ResolveSelection(sel, "compaction")
+}
+
+// ResolveSelection validates a persisted provider+model selection against the
+// current provider lists and returns the concrete choice. what names the
+// feature in error messages ("compaction", "sub-agent profile \"x\""). An empty
+// kind is not "current" here: callers handle that case themselves.
+func (c Config) ResolveSelection(sel CompactionModelConfig, what string) (CompactorChoice, error) {
+	kind := CompactorKind(strings.ToLower(strings.TrimSpace(sel.Kind)))
 	entry, err := c.ProviderEntry(kind, strings.TrimSpace(sel.Provider))
 	if err != nil {
 		return CompactorChoice{}, err
@@ -103,7 +111,7 @@ func (c Config) Compactor() (CompactorChoice, error) {
 	model := strings.TrimSpace(sel.Model)
 	if model == "" {
 		if entry == nil || entry.Model == "" {
-			return CompactorChoice{}, fmt.Errorf("compaction model is empty")
+			return CompactorChoice{}, fmt.Errorf("%s model is empty", what)
 		}
 		model = entry.Model
 	}
@@ -213,7 +221,7 @@ func (c Config) ProviderEntry(kind CompactorKind, name string) (*OpenAICompatibl
 	case CompactorAnthropic:
 		list = c.AnthropicProviders
 	default:
-		return nil, fmt.Errorf("unknown compaction provider kind %q", string(kind))
+		return nil, fmt.Errorf("unknown provider kind %q", string(kind))
 	}
 	for i := range list {
 		if list[i].Name == name {
@@ -221,9 +229,9 @@ func (c Config) ProviderEntry(kind CompactorKind, name string) (*OpenAICompatibl
 		}
 	}
 	if name == "" {
-		return nil, fmt.Errorf("compaction provider is empty")
+		return nil, fmt.Errorf("provider is empty")
 	}
-	return nil, fmt.Errorf("compaction provider %q is not configured", name)
+	return nil, fmt.Errorf("provider %q is not configured", name)
 }
 
 // CompactionFailurePolicy returns the effective failure policy. An absent or

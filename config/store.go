@@ -138,6 +138,45 @@ func SetCompactionOnFailure(p CompactionFailurePolicy) {
 	config.CompactionOnFailure = string(p)
 }
 
+// SetSubagentProfile creates or replaces a named sub-agent profile. The map is
+// copied so a Config value obtained earlier from Get never sees the change.
+func SetSubagentProfile(name string, p SubagentProfileConfig) {
+	next := make(map[string]SubagentProfileConfig, len(config.SubagentProfiles)+1)
+	for k, v := range config.SubagentProfiles {
+		next[k] = v
+	}
+	next[name] = p
+	config.SubagentProfiles = next
+}
+
+// DeleteSubagentProfile removes a profile and clears the default when it
+// pointed at it.
+func DeleteSubagentProfile(name string) {
+	next := make(map[string]SubagentProfileConfig, len(config.SubagentProfiles))
+	for k, v := range config.SubagentProfiles {
+		if k != name {
+			next[k] = v
+		}
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	config.SubagentProfiles = next
+	if config.SubagentDefaultProfile == name {
+		config.SubagentDefaultProfile = ""
+	}
+}
+
+// SetSubagentDefaultProfile selects the profile used when none is requested.
+func SetSubagentDefaultProfile(name string) {
+	config.SubagentDefaultProfile = name
+}
+
+// SetSubagentOnFailure stores the failure policy of sub-agent model chains.
+func SetSubagentOnFailure(p CompactionFailurePolicy) {
+	config.SubagentOnFailure = string(p)
+}
+
 // SetPreToolHook sets the pre-tool execution hook.
 func SetPreToolHook(enabled bool, command string) {
 	config.Hooks.PreTool = ToolHook{Enabled: enabled, Command: command}

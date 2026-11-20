@@ -202,6 +202,7 @@ The configuration flow can manage:
 - optional delay between requests
 - chat rendering (`alt_screen`: inline REPL by default, full-screen TUI when true), under **CLI Settings → Chat TUI: alt screen**
 - auto-compaction settings (enable/disable, estimated-token threshold, the model that writes the summary and its failure policy), under **CLI Settings** / **CLI Settings → Compaction Model**
+- sub-agent profiles: named model/provider presets with an ordered fallback chain (`subagent_profiles`, `subagent_default_profile`, `subagent_on_failure`), under **CLI Settings → Sub-agent Profiles**
 - pre/post tool-execution hooks (enable/disable + command), under **CLI Settings → Hooks**
 - status-bar hook (per provider: on/off, command, include API keys/tokens, refresh interval, refresh on turn), under **CLI Settings → Status Bar Hook**
 - base system prompt (persona), stored in `SYSTEM_PROMPT.txt` with `${VAR}` placeholders, under **CLI Settings**
@@ -228,6 +229,15 @@ Example OpenAI-compatible local provider:
   "compaction_mid_turn": false,
   "compaction_model": {"kind": "anthropic", "provider": "Claude", "model": "claude-haiku-4.5"},
   "compaction_on_failure": "fallback_current",
+  "subagent_profiles": {
+    "explore": {
+      "kind": "anthropic", "provider": "Claude", "model": "claude-haiku-4.5",
+      "description": "cheap and fast: read-only exploration and search",
+      "fallback": [{"kind": "openai", "provider": "Cheap", "model": "cheap-model"}]
+    }
+  },
+  "subagent_default_profile": "",
+  "subagent_on_failure": "fallback_current",
   "agents_md_enabled": true,
   "agents_md_max_bytes": 32768,
   "agents_md_fallback_filenames": ["CLAUDE.md", "GEMINI.md"],
@@ -376,6 +386,16 @@ Anthropic requests ask for prompt caching in **two layers**. The **static prefix
 - **Graceful three-level fallback.** An Anthropic-compatible endpoint with an older schema may refuse the field. Each refusal is remembered for the rest of the process and steps the request down one level: automatic + static breakpoints → explicit breakpoints only (the conversation tail is pinned explicitly instead, for a gateway with no top-level field) → no `cache_control` at all. The body is rebuilt and retried at each step, and any `cache_control` typed through `/reasoning → Advanced → Extra body` is dropped too, so a refusal never costs the turn. A refusal that does not name the field is reported as a normal API error. `FYC_ANTHROPIC_NO_CACHE=1` opts out up front.
 - **Visible in the stats.** The token line shows `cache hit:` (input tokens read from the cache) and `cache write:` (tokens written by this request); conversation logs record the write count as `cache_write_tokens`.
 - Compaction rewrites the history, which invalidates the cached conversation prefix; the next turn writes it again.
+
+## Sub-agent profiles
+
+By default a sub-agent runs on the model active in the chat. A **profile** pins a different model (and provider) for a sub-agent, so cheap exploration can run on a small model while the main agent keeps the strong one.
+
+- **Definition:** `subagent_profiles` in `config.json`, or **CLI Settings → Sub-agent Profiles**. A profile has `kind`/`provider`/`model` (same shape and meaning as `compaction_model`: `kind` is one of `gemini`, `codex`, `openai`, `responses`, `anthropic`; an empty `model` inherits the entry's model), an optional `description` and an ordered `fallback` list of further selections. Profile names cannot contain spaces.
+- **Choosing one:** the main agent passes `"profile": "<name>"` per sub-agent in `spawn_subagents`. The configured names and their descriptions are listed in that tool's definition, so the model knows when to use each. An unknown name fails the whole call with the list of valid ones, instead of silently running the agent on another model. Without `profile`, the sub-agent uses `subagent_default_profile`, or the active model when none is set.
+- **Fallback chain:** the profile's own model, then its `fallback` entries in order, then the model active at that moment. A model is skipped to the next one when its request fails, including a deleted provider entry or a revoked key. `subagent_on_failure` set to `abort` removes the last step (the active model), so the sub-agent fails with the list of errors instead. Entries that no longer resolve are skipped and reported, never fatal on their own, and duplicates are dropped. A stale `subagent_default_profile` degrades to the active model.
+- **Stickiness:** once a model of the chain answers, the rest of that sub-agent's requests start from it, so a failing primary is not retried on every iteration. When the model changes, earlier reasoning content and signatures are dropped from the sub-agent's history, since they are only valid for the model that produced them. The final result carries a short note saying which model failed and which one finished.
+- **Never writes the configuration:** profiles build providers from the entries' own credentials through the same path as the chat and the compactor. Switching with `/models` does not change profiles, and a profile never changes the active provider.
 
 ## Auto-compaction
 
@@ -728,6 +748,8 @@ curl -N http://127.0.0.1:8787/ \
 | `config/secrets.go` | Secret placeholders (`${VAR}` / `${VAR:-default}`) and the `auth.json` store: resolution at load, migration of inline secrets on save, generated (collision-free) variable names, the defensive `.gitignore`/`.fycignore` next to the config, and a *frozen* collapse (writes nothing to `auth.json`) when the store is unreadable or unwritable. |
 | `config/system_prompt.go` | Editable base system prompt: `SYSTEM_PROMPT.txt` storage and `${VAR}` rendering (environment variables only, no shell). |
 | `config/agentsmd.go` | AGENTS.md settings: enable flag, byte budget, and fallback filenames (with defaults). |
+| `config/subagent_profiles.go` | Sub-agent profiles (`subagent_profiles`, `subagent_default_profile`, `subagent_on_failure`): resolution of the ordered model chain (profile, fallbacks, active model) on top of `ResolveSelection`. |
+| `subagent_provider.go` | Wires `tools.SubagentProviderFactory` to `newProvider` and lists the configured profiles in the `spawn_subagents` definition. |
 | `config/compaction_model.go` | Compaction model selection (`compaction_model`) and failure policy (`compaction_on_failure`): provider-kind resolution against the live provider lists, “current” as the default, UI labels, and the per-provider reasoning key used by the compactor. |
 | `config/lsp.go` | LSP discovery overrides: search paths, per-server binaries, and the disabled list (accessed via `config.Get().LSP`). |
 | `config/sandbox.go` | `sandbox.gpu` switch (default on) for GPU passthrough into the Linux `sh` sandbox. |

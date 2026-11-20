@@ -22,6 +22,7 @@ func manageCLISettings() {
 		idx := ui.SelectOption("CLI Settings", []string{
 			"Auto Compaction",
 			"Compaction Model",
+			"Sub-agent Profiles",
 			"Hooks",
 			"Status Bar Hook",
 			"System Prompt (persona)",
@@ -38,20 +39,22 @@ func manageCLISettings() {
 		case 1:
 			manageCompactorSettings()
 		case 2:
-			EditHooks()
+			manageSubagentProfiles()
 		case 3:
-			EditStatusBarHook()
+			EditHooks()
 		case 4:
-			EditSystemPrompt(nil)
+			EditStatusBarHook()
 		case 5:
-			manageBrowserPaths()
+			EditSystemPrompt(nil)
 		case 6:
-			manageSandboxGPU()
+			manageBrowserPaths()
 		case 7:
-			manageMaxMedia()
+			manageSandboxGPU()
 		case 8:
-			manageAltScreen()
+			manageMaxMedia()
 		case 9:
+			manageAltScreen()
+		case 10:
 			return
 		case ui.SelectorCanceled:
 			return // q / Ctrl+C: leave the CLI Settings menu

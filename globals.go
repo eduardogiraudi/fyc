@@ -441,7 +441,7 @@ func (s *ChatSession) getToolsForAI() []types.Tool {
 		if !mcpAvailable && (name == "list_mcp_resources" || name == "read_mcp_resource" || name == "list_mcp_resource_templates") {
 			continue
 		}
-		filtered = append(filtered, t)
+		filtered = append(filtered, withSubagentProfiles(t))
 	}
 	return s.activeMode().FilterTools(filtered)
 }
@@ -972,6 +972,7 @@ Rules: always take a "screenshot" first; all coordinates (x, y, x2, y2) must be 
 								"instructions":   {Type: "string", Description: "Task instructions for this agent"},
 								"tools":          {Type: "array", Description: "List of tool names this agent can use", Items: &types.ToolProperty{Type: "string"}},
 								"max_iterations": {Type: "number", Description: "Max iterations before the agent stops. Default: 10"},
+								"profile":        {Type: "string", Description: "Optional name of a configured sub-agent profile (selects the model/provider for this agent). Omit to use the default."},
 							},
 							Required: []string{"id", "subdirectory", "instructions"},
 						},

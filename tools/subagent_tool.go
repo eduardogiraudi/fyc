@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"fuckyourcli/config"
 	"fuckyourcli/mcp"
+	"strings"
 )
 
 // executeSpawnSubagentsTool handles the "spawn_subagents" case.
@@ -31,6 +33,16 @@ func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalI
 			return fmt.Sprintf("error: agent %d: id, subdirectory and instructions are required", i)
 		}
 
+		profile, _ := agent["profile"].(string)
+		profile = strings.TrimSpace(profile)
+		if profile != "" {
+			// Fail the whole call on a typo instead of silently running the
+			// agent on another model.
+			if _, _, err := config.Get().SubagentChain(profile); err != nil {
+				return fmt.Sprintf("error: agent %d: %v", i, err)
+			}
+		}
+
 		allowedTools := extractStringList(agent, "tools")
 		maxIter := 10
 		if maxIterRaw, ok := agent["max_iterations"].(float64); ok {
@@ -49,6 +61,7 @@ func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalI
 			Instructions:  instructions,
 			AllowedTools:  allowedTools,
 			MaxIterations: maxIter,
+			Profile:       profile,
 		})
 	}
 
