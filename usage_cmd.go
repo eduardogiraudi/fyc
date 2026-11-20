@@ -131,9 +131,10 @@ func usageNotes(u logger.Usage, session logger.Totals) []string {
 
 // showUsage prints the /usage report to the chat.
 func showUsage(s *ChatSession) {
+	sink := s.commandSink()
 	u, err := logger.LoadUsage(time.Now())
 	if err != nil {
-		sinkLine(s.Sink, ui.ErrorStyle.Render("✗ Cannot read usage: "+err.Error()))
+		sinkLine(sink, ui.ErrorStyle.Render("✗ Cannot read usage: "+err.Error()))
 		return
 	}
 	var session logger.Totals
@@ -141,18 +142,18 @@ func showUsage(s *ChatSession) {
 	if s.SessionID != "" {
 		session, roles, err = logger.SessionUsage(s.SessionID)
 		if err != nil {
-			sinkLine(s.Sink, ui.ErrorStyle.Render("✗ Cannot read this session's usage: "+err.Error()))
+			sinkLine(sink, ui.ErrorStyle.Render("✗ Cannot read this session's usage: "+err.Error()))
 		}
 	}
 
 	lines := usageLines(u, session, roles)
-	sinkLine(s.Sink, ui.TitleStyle.Render("Usage"))
-	sinkLine(s.Sink, ui.InfoStyle.Render(lines[0]))
+	sinkLine(sink, ui.TitleStyle.Render("Usage"))
+	sinkLine(sink, ui.InfoStyle.Render(lines[0]))
 	for _, line := range lines[1:] {
-		sinkLine(s.Sink, ui.InfoStyle.Render(line[:usageLabelW])+ui.OkStyle.Render(line[usageLabelW:]))
+		sinkLine(sink, ui.InfoStyle.Render(line[:usageLabelW])+ui.OkStyle.Render(line[usageLabelW:]))
 	}
 	for _, note := range usageNotes(u, session) {
-		sinkLine(s.Sink, ui.TipStyle.Render(note))
+		sinkLine(sink, ui.TipStyle.Render(note))
 	}
-	sinkBlankLine(s.Sink)
+	sinkBlankLine(sink)
 }

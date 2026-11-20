@@ -456,6 +456,15 @@ func (m inputModel) ResetForNext() inputModel {
 	return next
 }
 
+// RetainDraft undoes a submit the chat refused to run (a command that cannot be
+// sent while the model is generating): the text stays in the buffer, editable,
+// and is not added to the history.
+func (m inputModel) RetainDraft() inputModel {
+	m.submitted = false
+	m.value = ""
+	return m
+}
+
 func (m inputModel) UpdateComponent(msg tea.Msg) (inputModel, tea.Cmd) {
 	updated, cmd := m.Update(msg)
 	return updated.(inputModel), cmd

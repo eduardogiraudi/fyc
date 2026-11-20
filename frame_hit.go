@@ -30,7 +30,10 @@ type frameHit struct {
 	scrollRow, scrollWidth      int
 	scrollOK                    bool
 	inputRow                    int
-	inputOK                     bool
+	// inputRows is how many rows the input bar drew: a press inside them (and
+	// not on a button) starts a selection of the typed text.
+	inputRows int
+	inputOK   bool
 }
 
 // target reports what sits at a screen cell of the last frame.
@@ -56,12 +59,14 @@ func (m chatModel) hitAt(x, y int) hoverTarget {
 // recordHit stores where the clickable parts of the frame landed: frame is the
 // rows altScreenView is about to return, hintRow the row of the "rows below"
 // hint and statusRow the row of the provider/mode line (-1 for either when the
-// part is not on screen). inputRow can be negative when clipping hides its head.
-func (m chatModel) recordHit(frame []string, hintRow, statusRow, inputRow int) {
+// part is not on screen). inputRow is the first row of the input bar and
+// inputRows how many rows it drew; inputRow can be negative when clipping hides
+// its head.
+func (m chatModel) recordHit(frame []string, hintRow, statusRow, inputRow, inputRows int) {
 	if m.hit == nil {
 		return
 	}
-	*m.hit = frameHit{inputRow: inputRow, inputOK: m.modal == nil}
+	*m.hit = frameHit{inputRow: inputRow, inputRows: inputRows, inputOK: m.modal == nil}
 	if hintRow >= 0 && hintRow < len(frame) {
 		m.hit.scrollRow = hintRow
 		m.hit.scrollWidth = ansi.StringWidth(frame[hintRow])

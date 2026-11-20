@@ -49,6 +49,10 @@ func padTo(styled, original string, w int) string {
 }
 
 func handleSlashCommand(input string, s *ChatSession) (bool, string) {
+	// A command run beside a generation captures its output (see
+	// runLiveCommand): the transcript belongs to the model, so the caller shows
+	// it as a transient notice instead.
+	sink := s.commandSink()
 	if !strings.HasPrefix(input, "/") {
 		return false, ""
 	}
@@ -77,23 +81,23 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		hSep := strings.Repeat("─", cmdW)
 		dSep := strings.Repeat("─", descW)
 
-		s.Sink.WriteText(fmt.Sprintf("┌%s┬%s┐", hSep, dSep))
-		s.Sink.WriteNewline()
-		s.Sink.WriteText(fmt.Sprintf("│ %s │ %s │",
+		sink.WriteText(fmt.Sprintf("┌%s┬%s┐", hSep, dSep))
+		sink.WriteNewline()
+		sink.WriteText(fmt.Sprintf("│ %s │ %s │",
 			padTo(ui.TitleStyle.Render("Command"), "Command", cmdW-2),
 			padTo(ui.TitleStyle.Render("Description"), "Description", descW-2)))
-		s.Sink.WriteNewline()
-		s.Sink.WriteText(fmt.Sprintf("├%s┼%s┤", hSep, dSep))
-		s.Sink.WriteNewline()
+		sink.WriteNewline()
+		sink.WriteText(fmt.Sprintf("├%s┼%s┤", hSep, dSep))
+		sink.WriteNewline()
 		for _, cmd := range allCmds {
-			s.Sink.WriteText(fmt.Sprintf("│ %s │ %s │",
+			sink.WriteText(fmt.Sprintf("│ %s │ %s │",
 				padTo(ui.OkStyle.Render(cmd.Name), cmd.Name, cmdW-2),
 				padTo(ui.InfoStyle.Render(cmd.Description), cmd.Description, descW-2)))
-			s.Sink.WriteNewline()
+			sink.WriteNewline()
 		}
-		s.Sink.WriteText(fmt.Sprintf("└%s┴%s┘", hSep, dSep))
-		s.Sink.WriteNewline()
-		s.Sink.WriteNewline()
+		sink.WriteText(fmt.Sprintf("└%s┴%s┘", hSep, dSep))
+		sink.WriteNewline()
+		sink.WriteNewline()
 		return true, ""
 	}
 
@@ -102,20 +106,20 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/auto"))
 		if arg == "on" {
 			if !config.Get().NoAsk {
-				toggleAutoMode(s.Sink)
+				toggleAutoMode(sink)
 			} else {
-				s.Sink.WriteText(ui.OkStyle.Render("Auto mode enabled (session only)"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.OkStyle.Render("Auto mode enabled (session only)"))
+				sink.WriteNewline()
 			}
 		} else if arg == "off" {
 			if config.Get().NoAsk {
-				toggleAutoMode(s.Sink)
+				toggleAutoMode(sink)
 			} else {
-				s.Sink.WriteText(ui.InfoStyle.Render("Auto mode disabled"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Auto mode disabled"))
+				sink.WriteNewline()
 			}
 		} else {
-			toggleAutoMode(s.Sink)
+			toggleAutoMode(sink)
 		}
 		return true, ""
 	}
@@ -130,8 +134,8 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		} else if arg == "off" {
 			s.setToolEnabled("web_search", true)
 		} else {
-			s.Sink.WriteText(ui.InfoStyle.Render("Usage: /airplane [on|off]"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Usage: /airplane [on|off]"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		if !s.webSearchEnabled() && s.CurrentMode != nil && s.CurrentMode.RequiresWebSearch() {
@@ -140,18 +144,18 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		}
 		updateSystemPrompt(s)
 		if !s.webSearchEnabled() {
-			s.Sink.WriteText(ui.InfoStyle.Render("Airplane mode enabled: web_search and /deep disabled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Airplane mode enabled: web_search and /deep disabled"))
+			sink.WriteNewline()
 		} else {
-			s.Sink.WriteText(ui.OkStyle.Render("Airplane mode disabled: web_search and /deep enabled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.OkStyle.Render("Airplane mode disabled: web_search and /deep enabled"))
+			sink.WriteNewline()
 		}
 		return true, ""
 	}
 
 	if input == "/retry" || strings.HasPrefix(input, "/retry ") {
 		if strings.TrimSpace(strings.TrimPrefix(input, "/retry")) != "" {
-			sinkLine(chatSink(s), ui.InfoStyle.Render("Usage: /retry"))
+			sinkLine(sink, ui.InfoStyle.Render("Usage: /retry"))
 		} else if retryFailedRequestWith(s, func(s *ChatSession) { streamChatWithRetry(s, true) }) {
 			s.autosave()
 		}
@@ -175,40 +179,40 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		s.persistentModeInjected = ""
 		s.CurrentMode = nil
 		updateSystemPrompt(s)
-		s.Sink.WriteText(ui.OkStyle.Render("Context cleared"))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.OkStyle.Render("Context cleared"))
+		sink.WriteNewline()
 		return true, ""
 	}
 
 	// Handle /compact command
 	if input == "/compact" || strings.HasPrefix(input, "/compact ") {
 		if len(s.ChatHistory) <= 1 {
-			s.Sink.WriteText(ui.InfoStyle.Render("Nothing to compact"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Nothing to compact"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		originalCount := len(s.ChatHistory)
-		before, after, res, err := compactContext(s, s.Sink)
+		before, after, res, err := compactContext(s, sink)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				sinkLine(s.Sink, ui.InfoStyle.Render("Compaction interrupted."))
+				sinkLine(sink, ui.InfoStyle.Render("Compaction interrupted."))
 			} else {
-				sinkLine(s.Sink, ui.ErrorStyle.Render("✗ Error during compaction: "+err.Error()+"."+compactionFailureHint(config.Get(), false)))
+				sinkLine(sink, ui.ErrorStyle.Render("✗ Error during compaction: "+err.Error()+"."+compactionFailureHint(config.Get(), false)))
 			}
 			return true, ""
 		}
 
 		if res.FellBack {
-			sinkLine(s.Sink, ui.TipStyle.Render(compactionFallbackNotice(res)))
+			sinkLine(sink, ui.TipStyle.Render(compactionFallbackNotice(res)))
 		}
-		sinkLine(s.Sink, ui.OkStyle.Render(fmt.Sprintf("✓ Context compacted. History reduced from %d to %d messages (~%d → ~%d tokens, compactor: %s).", originalCount, len(s.ChatHistory), before, after, res.Model)))
+		sinkLine(sink, ui.OkStyle.Render(fmt.Sprintf("✓ Context compacted. History reduced from %d to %d messages (~%d → ~%d tokens, compactor: %s).", originalCount, len(s.ChatHistory), before, after, res.Model)))
 		return true, ""
 	}
 
 	// Handle /usage command
 	if input == "/usage" || strings.HasPrefix(input, "/usage ") {
 		if strings.TrimSpace(strings.TrimPrefix(input, "/usage")) != "" {
-			sinkLine(s.Sink, ui.InfoStyle.Render("Usage: /usage"))
+			sinkLine(sink, ui.InfoStyle.Render("Usage: /usage"))
 		} else {
 			showUsage(s)
 		}
@@ -220,23 +224,23 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/sub"))
 		if arg == "" {
 			if s.subagentsEnabled() {
-				s.Sink.WriteText(ui.InfoStyle.Render("Sub-agent tools: enabled"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Sub-agent tools: enabled"))
+				sink.WriteNewline()
 			} else {
-				s.Sink.WriteText(ui.InfoStyle.Render("Sub-agent tools: disabled"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Sub-agent tools: disabled"))
+				sink.WriteNewline()
 			}
 		} else if arg == "off" {
 			s.setToolEnabled("spawn_subagents", false)
-			s.Sink.WriteText(ui.InfoStyle.Render("Sub-agent tools disabled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Sub-agent tools disabled"))
+			sink.WriteNewline()
 		} else if arg == "on" {
 			s.setToolEnabled("spawn_subagents", true)
-			s.Sink.WriteText(ui.OkStyle.Render("Sub-agent tools enabled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.OkStyle.Render("Sub-agent tools enabled"))
+			sink.WriteNewline()
 		} else {
-			s.Sink.WriteText(ui.InfoStyle.Render("Usage: /sub on|off"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Usage: /sub on|off"))
+			sink.WriteNewline()
 		}
 		updateSystemPrompt(s)
 		return true, ""
@@ -247,8 +251,8 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		lspChanged := s.refreshLSPToolAvailability()
 		gitChanged := s.refreshGitToolAvailability()
 		if toolMsg != "" {
-			s.Sink.WriteText(toolMsg)
-			s.Sink.WriteNewline()
+			sink.WriteText(toolMsg)
+			sink.WriteNewline()
 		}
 		if !s.webSearchEnabled() && s.CurrentMode != nil && s.CurrentMode.RequiresWebSearch() {
 			s.CurrentMode = nil
@@ -258,30 +262,30 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			updateSystemPrompt(s)
 		}
 		if notice := toolImageNotice(s); notice != "" {
-			s.Sink.WriteText(ui.InfoStyle.Render(notice))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render(notice))
+			sink.WriteNewline()
 		}
 		return true, ""
 	}
 
 	if input == "/hooks" || strings.HasPrefix(input, "/hooks ") {
 		if config.EditHooks() {
-			s.Sink.WriteText(ui.OkStyle.Render("Tool hooks updated."))
+			sink.WriteText(ui.OkStyle.Render("Tool hooks updated."))
 		} else {
-			s.Sink.WriteText(ui.InfoStyle.Render("No changes made."))
+			sink.WriteText(ui.InfoStyle.Render("No changes made."))
 		}
-		s.Sink.WriteNewline()
+		sink.WriteNewline()
 		return true, ""
 	}
 
 	if input == "/sysprompt" || strings.HasPrefix(input, "/sysprompt ") {
 		config.EditSystemPrompt(func(line string) {
-			s.Sink.WriteText(line)
-			s.Sink.WriteNewline()
+			sink.WriteText(line)
+			sink.WriteNewline()
 		})
 		updateSystemPrompt(s)
-		s.Sink.WriteText(ui.OkStyle.Render("System prompt reloaded."))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.OkStyle.Render("System prompt reloaded."))
+		sink.WriteNewline()
 		return true, ""
 	}
 
@@ -290,13 +294,13 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		var d float64
 		_, err := fmt.Sscanf(arg, "%f", &d)
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Invalid delay value. Please use a number (e.g., /delay 1.5)"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Invalid delay value. Please use a number (e.g., /delay 1.5)"))
+			sink.WriteNewline()
 		} else {
 			config.SetDelay(d)
 			config.Save()
-			s.Sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Delay set to %.1f seconds"), d))
-			s.Sink.WriteNewline()
+			sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Delay set to %.1f seconds"), d))
+			sink.WriteNewline()
 		}
 		return true, ""
 	}
@@ -306,29 +310,29 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/temp"))
 		if arg == "" {
 			cfg := config.Get()
-			s.Sink.WriteText(fmt.Sprintf(ui.InfoStyle.Render("Current temperature: %.2f"), cfg.Temperature))
-			s.Sink.WriteNewline()
-			s.Sink.WriteText(ui.InfoStyle.Render("Range: 0.0 - 2.0 (lower = more focused, higher = more creative)"))
-			s.Sink.WriteNewline()
+			sink.WriteText(fmt.Sprintf(ui.InfoStyle.Render("Current temperature: %.2f"), cfg.Temperature))
+			sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Range: 0.0 - 2.0 (lower = more focused, higher = more creative)"))
+			sink.WriteNewline()
 		} else {
 			var temp float64
 			_, err := fmt.Sscanf(arg, "%f", &temp)
 			if err != nil {
-				s.Sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("Current temperature: %.1f. Use /temp number (e.g., /temp 0.8) to change it.", config.Get().Temperature)))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("Current temperature: %.1f. Use /temp number (e.g., /temp 0.8) to change it.", config.Get().Temperature)))
+				sink.WriteNewline()
 			} else if temp < 0.0 || temp > 2.0 {
-				s.Sink.WriteText(ui.InfoStyle.Render("Temperature must be between 0.0 and 2.0"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Temperature must be between 0.0 and 2.0"))
+				sink.WriteNewline()
 			} else {
 				config.SetTemperature(temp)
 				config.Save()
-				s.Sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Temperature set to %.2f"), temp))
-				s.Sink.WriteNewline()
+				sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Temperature set to %.2f"), temp))
+				sink.WriteNewline()
 				if currentTemperatureOmitted() {
-					s.Sink.WriteText(ui.TipStyle.Render("Warning: Temperature is not supported by the current model; preference saved. It will be used when a model that supports it is selected."))
-					s.Sink.WriteNewline()
+					sink.WriteText(ui.TipStyle.Render("Warning: Temperature is not supported by the current model; preference saved. It will be used when a model that supports it is selected."))
+					sink.WriteNewline()
 				}
-				s.Sink.WriteStats(currentProviderLine(), "")
+				sink.WriteStats(currentProviderLine(), "")
 			}
 		}
 		return true, ""
@@ -336,17 +340,17 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 
 	// Handle /model command
 	if input == "/model" || strings.HasPrefix(input, "/model ") {
-		s.Sink.WriteText(ui.InfoStyle.Render("Fetching available models..."))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.InfoStyle.Render("Fetching available models..."))
+		sink.WriteNewline()
 		models, err := config.GetAvailableModelsForCurrentProvider()
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Error fetching models: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Error fetching models: " + err.Error()))
+			sink.WriteNewline()
 			return true, ""
 		}
 		if len(models) == 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("No models available for current provider"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("No models available for current provider"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		currentModel := config.Get().Model
@@ -358,14 +362,14 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 				modelOptions = append(modelOptions, m)
 			}
 		}
-		idx := ui.SelectModelOption(s.Sink, "Select model", modelOptions)
+		idx := ui.SelectModelOption(sink, "Select model", modelOptions)
 		if idx < 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("Model selection cancelled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Model selection cancelled"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		selectedModel := models[idx]
-		saveToFile := s.Sink.SelectOption("Save this model selection to config file?", []string{
+		saveToFile := sink.SelectOption("Save this model selection to config file?", []string{
 			"No, use only for this session",
 			"Yes, save permanently",
 		}) == 1
@@ -373,20 +377,20 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		currentProvider := config.GetProvider()
 		err = config.SwitchProviderAndModel(currentProvider, selectedModel, saveToFile)
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Error switching model: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Error switching model: " + err.Error()))
+			sink.WriteNewline()
 		} else {
-			s.Sink.WriteText(ui.OkStyle.Render("Model switched to: " + selectedModel))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.OkStyle.Render("Model switched to: " + selectedModel))
+			sink.WriteNewline()
 			if saveToFile {
-				s.Sink.WriteText(ui.InfoStyle.Render("Model saved to config file"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Model saved to config file"))
+				sink.WriteNewline()
 			}
 		}
 		updateSystemPrompt(s)
 		if notice := toolImageNotice(s); notice != "" {
-			s.Sink.WriteText(ui.InfoStyle.Render(notice))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render(notice))
+			sink.WriteNewline()
 		}
 		return true, ""
 	}
@@ -401,8 +405,8 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 	if input == "/provider" || strings.HasPrefix(input, "/provider ") {
 		providers := config.GetAvailableProviders()
 		if len(providers) == 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("No providers configured. Run 'fuckyourcli config' first."))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("No providers configured. Run 'fuckyourcli config' first."))
+			sink.WriteNewline()
 			return true, ""
 		}
 		currentProviderInfo := config.GetCurrentProviderInfo()
@@ -414,10 +418,10 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 				providerOptions = append(providerOptions, p)
 			}
 		}
-		idx := s.Sink.SelectOption("Select provider", providerOptions)
+		idx := sink.SelectOption("Select provider", providerOptions)
 		if idx < 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("Provider selection cancelled"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Provider selection cancelled"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		selectedProviderStr := providers[idx]
@@ -427,8 +431,8 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		}
 		providerType, model, err := config.ParseProviderSelection(selectedProviderStr)
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Error parsing provider: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Error parsing provider: " + err.Error()))
+			sink.WriteNewline()
 			return true, ""
 		}
 		if providerType == config.ProviderOpenAIResponsesCompatible {
@@ -439,35 +443,35 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		finalModel := model
 		chooseModel := model == ""
 		if !chooseModel {
-			choice := s.Sink.SelectOption(fmt.Sprintf("Use current model for %s?", providerName), []string{
+			choice := sink.SelectOption(fmt.Sprintf("Use current model for %s?", providerName), []string{
 				"Yes, use " + model,
 				"No, choose another model",
 			})
 			if choice < 0 {
-				sinkLine(s.Sink, ui.InfoStyle.Render("Provider selection cancelled"))
+				sinkLine(sink, ui.InfoStyle.Render("Provider selection cancelled"))
 				return true, ""
 			}
 			chooseModel = choice == 1
 		}
 		if chooseModel {
-			sinkLine(s.Sink, ui.InfoStyle.Render(fmt.Sprintf("Fetching available models for %s...", selectedProviderStr)))
+			sinkLine(sink, ui.InfoStyle.Render(fmt.Sprintf("Fetching available models for %s...", selectedProviderStr)))
 			models, fetchErr := config.GetAvailableModelsForProvider(providerType, providerName, model)
 			if fetchErr != nil || len(models) == 0 {
 				if model == "" {
-					sinkLine(s.Sink, ui.InfoStyle.Render("No models available for this provider"))
+					sinkLine(sink, ui.InfoStyle.Render("No models available for this provider"))
 					return true, ""
 				}
-				sinkLine(s.Sink, ui.InfoStyle.Render("Could not fetch models for this provider. Using current model."))
+				sinkLine(sink, ui.InfoStyle.Render("Could not fetch models for this provider. Using current model."))
 				models = []string{model}
 			}
-			modelIdx := ui.SelectModelOption(s.Sink, fmt.Sprintf("Select model for %s", selectedProviderStr), models)
+			modelIdx := ui.SelectModelOption(sink, fmt.Sprintf("Select model for %s", selectedProviderStr), models)
 			if modelIdx < 0 {
-				sinkLine(s.Sink, ui.InfoStyle.Render("Model selection cancelled"))
+				sinkLine(sink, ui.InfoStyle.Render("Model selection cancelled"))
 				return true, ""
 			}
 			finalModel = models[modelIdx]
 		}
-		saveToFile := s.Sink.SelectOption("Save this provider and model selection to config file?", []string{
+		saveToFile := sink.SelectOption("Save this provider and model selection to config file?", []string{
 			"No, use only for this session",
 			"Yes, save permanently",
 		}) == 1
@@ -481,20 +485,20 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			err = config.SwitchProviderAndModel(providerType, finalModel, saveToFile)
 		}
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Error switching provider: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Error switching provider: " + err.Error()))
+			sink.WriteNewline()
 		} else {
-			s.Sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Switched to provider: %s, model: %s"), selectedProviderStr, finalModel))
-			s.Sink.WriteNewline()
+			sink.WriteText(fmt.Sprintf(ui.OkStyle.Render("Switched to provider: %s, model: %s"), selectedProviderStr, finalModel))
+			sink.WriteNewline()
 			if saveToFile {
-				s.Sink.WriteText(ui.InfoStyle.Render("Configuration saved to config file"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Configuration saved to config file"))
+				sink.WriteNewline()
 			}
 		}
 		updateSystemPrompt(s)
 		if notice := toolImageNotice(s); notice != "" {
-			s.Sink.WriteText(ui.InfoStyle.Render(notice))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render(notice))
+			sink.WriteNewline()
 		}
 		return true, ""
 	}
@@ -503,31 +507,31 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 	if input == "/mode" || strings.HasPrefix(input, "/mode ") {
 		mName := strings.TrimSpace(strings.TrimPrefix(input, "/mode "))
 		if mName == "" || mName == "/mode" {
-			s.Sink.WriteText(ui.TitleStyle.Render("Available Modes:"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.TitleStyle.Render("Available Modes:"))
+			sink.WriteNewline()
 			for _, m := range modes.Modes {
 				if !s.webSearchEnabled() && m.RequiresWebSearch() {
 					continue
 				}
-				s.Sink.WriteText(fmt.Sprintf("  - %s: %s (%s)", ui.OkStyle.Render(m.Name), m.Description, ui.InfoStyle.Render(m.Prefix)))
-				s.Sink.WriteNewline()
+				sink.WriteText(fmt.Sprintf("  - %s: %s (%s)", ui.OkStyle.Render(m.Name), m.Description, ui.InfoStyle.Render(m.Prefix)))
+				sink.WriteNewline()
 			}
-			s.Sink.WriteText(fmt.Sprintf("  - %s: Back to normal chat", ui.OkStyle.Render("chat")))
-			s.Sink.WriteNewline()
+			sink.WriteText(fmt.Sprintf("  - %s: Back to normal chat", ui.OkStyle.Render("chat")))
+			sink.WriteNewline()
 			return true, ""
 		}
 		if mName == "chat" || mName == "default" {
 			s.CurrentMode = nil
 			s.persistentModeInjected = ""
 			updateSystemPrompt(s)
-			s.Sink.WriteText(ui.OkStyle.Render("Switched to Chat mode"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.OkStyle.Render("Switched to Chat mode"))
+			sink.WriteNewline()
 		} else {
 			m := modes.GetMode(mName)
 			if m != nil {
 				if !s.webSearchEnabled() && m.RequiresWebSearch() {
-					s.Sink.WriteText(ui.InfoStyle.Render("Deep Research mode is disabled while airplane mode is enabled"))
-					s.Sink.WriteNewline()
+					sink.WriteText(ui.InfoStyle.Render("Deep Research mode is disabled while airplane mode is enabled"))
+					sink.WriteNewline()
 					return true, ""
 				}
 				// A (re)selection clears the injection flag so the mode's
@@ -535,11 +539,11 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 				s.persistentModeInjected = ""
 				s.CurrentMode = m
 				updateSystemPrompt(s)
-				s.Sink.WriteText(ui.OkStyle.Render("Switched to " + m.Name + " mode"))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.OkStyle.Render("Switched to " + m.Name + " mode"))
+				sink.WriteNewline()
 			} else {
-				s.Sink.WriteText(ui.InfoStyle.Render("Unknown mode: " + mName))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("Unknown mode: " + mName))
+				sink.WriteNewline()
 			}
 		}
 		return true, ""
@@ -549,27 +553,27 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 	if input == "/skills" || strings.HasPrefix(input, "/skills ") {
 		parts := strings.Fields(strings.TrimSpace(strings.TrimPrefix(input, "/skills")))
 		if len(parts) == 0 {
-			s.Sink.WriteText(ui.InfoStyle.Render("Usage: /skills <name> <prompt>"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Usage: /skills <name> <prompt>"))
+			sink.WriteNewline()
 			return true, ""
 		}
 		skillName := parts[0]
 		skillPath := tools.FindSkillPath(skillName, s.RestrictedRoot)
 		if skillPath == "" {
-			s.Sink.WriteText(ui.InfoStyle.Render("Unknown skill: " + skillName))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Unknown skill: " + skillName))
+			sink.WriteNewline()
 			return true, ""
 		}
 		data, err := os.ReadFile(skillPath)
 		if err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Failed to read skill: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Failed to read skill: " + err.Error()))
+			sink.WriteNewline()
 			return true, ""
 		}
 		modifiedInput := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(input, "/skills")), skillName))
 		if modifiedInput == "" {
-			s.Sink.WriteText(ui.InfoStyle.Render("Add a prompt after the skill name."))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Add a prompt after the skill name."))
+			sink.WriteNewline()
 			return true, ""
 		}
 		modifiedInput = "[SKILL: " + skillName + "]\n" + string(data) + "\n\n" + modifiedInput
@@ -585,6 +589,49 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 	return false, ""
 }
 
+// liveSlashCommands are the commands a running generation does not block: they
+// only read or change display and behaviour state and never touch the
+// conversation. Everything else has to wait for the model — a prompt, the modes
+// (they inject their instructions and tool policy into the turn in flight), and
+// every command that rewrites the history, the system prompt or the provider.
+var liveSlashCommands = []string{
+	"/help", "/auto", "/airplane", "/sub", "/tools", "/hooks", "/sysprompt",
+	"/delay", "/temp", "/reasoning", "/usage",
+}
+
+// liveSlashCommand reports whether input is a command allowed while the model is
+// generating. Matching is on the command word alone, so arguments ("/temp 0.8")
+// are fine and a prompt that merely starts with a path ("/usr/bin/...") is not.
+func liveSlashCommand(input string) bool {
+	name := strings.TrimSpace(input)
+	if i := strings.IndexAny(name, " \t\n"); i >= 0 {
+		name = name[:i]
+	}
+	for _, cmd := range liveSlashCommands {
+		if name == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// runLiveCommand runs a command beside a running generation and returns what it
+// printed instead of committing it to the transcript: the chat shows it as a
+// transient notice above the input (see chatModel.notice). Live commands are
+// serialized because the redirection is session state, and the capture only
+// exists while one of them runs.
+func (s *ChatSession) runLiveCommand(input string) string {
+	s.liveCommandMu.Lock()
+	defer s.liveCommandMu.Unlock()
+	capture := ui.NewCaptureSink(s.Sink)
+	s.liveCommandSink = capture
+	defer func() { s.liveCommandSink = nil }()
+	if handled, _ := handleSlashCommand(input, s); !handled {
+		return ""
+	}
+	return capture.Text()
+}
+
 // handleSessionsCommand opens the interactive session manager. It is the single
 // entry point for /sessions: arguments are ignored (the old typed
 // "/sessions <action>" form is gone) and everything happens through the menu.
@@ -594,23 +641,24 @@ func handleSessionsCommand(s *ChatSession, input string) {
 
 // applySessionChoice switches the active chat; an empty id starts a new one.
 func applySessionChoice(s *ChatSession, id string) {
+	sink := s.commandSink()
 	if id == "" {
 		if err := startNewChat(s); err != nil {
-			s.Sink.WriteText(ui.InfoStyle.Render("Cannot start a new chat: " + err.Error()))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Cannot start a new chat: " + err.Error()))
+			sink.WriteNewline()
 			return
 		}
-		s.Sink.WriteText(ui.OkStyle.Render("Started a new chat"))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.OkStyle.Render("Started a new chat"))
+		sink.WriteNewline()
 		return
 	}
 	if err := switchChatSession(s, id); err != nil {
-		s.Sink.WriteText(ui.InfoStyle.Render("Cannot switch session: " + err.Error()))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.InfoStyle.Render("Cannot switch session: " + err.Error()))
+		sink.WriteNewline()
 		return
 	}
-	s.Sink.WriteText(ui.OkStyle.Render("Switched to session " + id))
-	s.Sink.WriteNewline()
+	sink.WriteText(ui.OkStyle.Render("Switched to session " + id))
+	sink.WriteNewline()
 }
 
 // reasoningModeOption is one row of the /reasoning mode menu. The key is what
@@ -700,6 +748,7 @@ func transportForProvider(pt config.ProviderType) reasoning.Transport {
 // offers only the choices it can actually encode. The raw escape hatches live
 // under "Advanced".
 func handleReasoningCommand(s *ChatSession) {
+	sink := s.commandSink()
 	cfg := config.Get()
 	baseURL, _ := config.ActiveProviderEndpoint()
 	host := hostFromURL(baseURL)
@@ -710,50 +759,50 @@ func handleReasoningCommand(s *ChatSession) {
 	intent, override := config.ActiveReasoning()
 	profile, det := reasoning.Lookup(transportForProvider(cfg.Provider), host, cfg.Model, override)
 
-	s.Sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("Model: %s  ·  current reasoning: %s", cfg.Model, cfg.Reasoning.Label())))
-	s.Sink.WriteNewline()
+	sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("Model: %s  ·  current reasoning: %s", cfg.Model, cfg.Reasoning.Label())))
+	sink.WriteNewline()
 	catalogNote := ""
 	if inCatalog {
 		catalogNote = "  ·  catalog ✓"
 	}
-	s.Sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("detected: %s (%s)%s", familyLabel(det), det.Source, catalogNote)))
-	s.Sink.WriteNewline()
+	sink.WriteText(ui.InfoStyle.Render(fmt.Sprintf("detected: %s (%s)%s", familyLabel(det), det.Source, catalogNote)))
+	sink.WriteNewline()
 	if sum := profile.Summary(); sum != "" {
-		s.Sink.WriteText(ui.InfoStyle.Render("wire profile: " + sum))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.InfoStyle.Render("wire profile: " + sum))
+		sink.WriteNewline()
 	}
 	if pv := reasoning.Preview(intent, profile); pv != "" {
-		s.Sink.WriteText(ui.OkStyle.Render("sends now: " + pv))
+		sink.WriteText(ui.OkStyle.Render("sends now: " + pv))
 	} else {
-		s.Sink.WriteText(ui.TipStyle.Render("sends now: nothing (defensive — the server decides)"))
+		sink.WriteText(ui.TipStyle.Render("sends now: nothing (defensive — the server decides)"))
 	}
-	s.Sink.WriteNewline()
+	sink.WriteNewline()
 
 	if !det.Confident {
-		s.Sink.WriteText(ui.TipStyle.Render("⚠ model not recognised: the default sends no thinking parameters (defensive)"))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.TipStyle.Render("⚠ model not recognised: the default sends no thinking parameters (defensive)"))
+		sink.WriteNewline()
 	}
 	if info := models.ReasoningInfo(cfg.Model); info != "" {
-		s.Sink.WriteText(ui.InfoStyle.Render(info))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.InfoStyle.Render(info))
+		sink.WriteNewline()
 	}
 	// A per-provider override (Wire fields) replaces the auto-detected profile
 	// entirely: show it so the user always sees what will be sent.
 	if key := config.CurrentProviderKey(); key != "" {
 		if pc, ok := config.ReasoningForProvider(key); ok {
 			if summary := pc.Summary(); summary != "" {
-				s.Sink.WriteText(ui.InfoStyle.Render("provider override (" + key + "): " + summary))
-				s.Sink.WriteNewline()
+				sink.WriteText(ui.InfoStyle.Render("provider override (" + key + "): " + summary))
+				sink.WriteNewline()
 			}
 		}
 	}
 	if inCatalog && caps.Status != "" {
-		s.Sink.WriteText(ui.TipStyle.Render("⚠ catalog marks this model as " + caps.Status))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.TipStyle.Render("⚠ catalog marks this model as " + caps.Status))
+		sink.WriteNewline()
 	}
 	if inCatalog && caps.NoOptions {
-		s.Sink.WriteText(ui.TipStyle.Render("⚠ this model thinks but exposes no documented reasoning control"))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.TipStyle.Render("⚠ this model thinks but exposes no documented reasoning control"))
+		sink.WriteNewline()
 	}
 
 	options := reasoningModeOptions(profile)
@@ -764,7 +813,7 @@ func handleReasoningCommand(s *ChatSession) {
 
 	keep := cfg.Reasoning.ExtraBody
 	for {
-		idx := s.Sink.SelectOption("Reasoning mode", labels)
+		idx := sink.SelectOption("Reasoning mode", labels)
 		if idx < 0 || idx >= len(options) || options[idx].key == "cancel" {
 			return // Cancel (or dismissed)
 		}
@@ -794,28 +843,30 @@ func handleReasoningCommand(s *ChatSession) {
 // applyReasoningChoice persists a wizard selection and shows its concrete wire
 // effect, so the user always sees what the next request will carry.
 func applyReasoningChoice(s *ChatSession, rc config.ReasoningConfig, profile reasoning.Profile) {
+	sink := s.commandSink()
 	config.SetReasoning(rc)
 	config.Save()
-	s.Sink.WriteText(ui.OkStyle.Render("Reasoning set to: " + rc.Label()))
+	sink.WriteText(ui.OkStyle.Render("Reasoning set to: " + rc.Label()))
 	if pv := reasoning.Preview(rc.Intent(), profile); pv != "" {
-		s.Sink.WriteText(ui.InfoStyle.Render("  ·  sends " + pv))
+		sink.WriteText(ui.InfoStyle.Render("  ·  sends " + pv))
 	} else {
-		s.Sink.WriteText(ui.InfoStyle.Render("  ·  sends nothing"))
+		sink.WriteText(ui.InfoStyle.Render("  ·  sends nothing"))
 	}
-	s.Sink.WriteNewline()
+	sink.WriteNewline()
 }
 
 // reasoningAdvancedMenu is the raw escape-hatch submenu. It returns ok=true with
 // a ready-to-persist config only when the user picked something concrete (custom
 // effort); the other rows persist their own edits and redraw the menu.
 func reasoningAdvancedMenu(s *ChatSession, keep map[string]any, caps models.Capabilities) (config.ReasoningConfig, bool) {
+	sink := s.commandSink()
 	opts := reasoningAdvancedOptions()
 	labels := make([]string, len(opts))
 	for i, o := range opts {
 		labels[i] = o.label
 	}
 	for {
-		idx := s.Sink.SelectOption("Advanced reasoning options", labels)
+		idx := sink.SelectOption("Advanced reasoning options", labels)
 		if idx < 0 || opts[idx].key == "back" {
 			return config.ReasoningConfig{}, false
 		}
@@ -846,6 +897,7 @@ func familyLabel(det reasoning.Detection) string {
 // Esc on the mode menu itself does. The returned config is ready to be
 // persisted.
 func reasoningSubmenu(s *ChatSession, key string, keep map[string]any, caps models.Capabilities) (rc config.ReasoningConfig, back bool) {
+	sink := s.commandSink()
 	const backLabel = "← Back"
 	if level, ok := strings.CutPrefix(key, "effort:"); ok {
 		return config.ReasoningConfig{Mode: "effort", Effort: level, ExtraBody: keep}, false
@@ -880,7 +932,7 @@ func reasoningSubmenu(s *ChatSession, key string, keep map[string]any, caps mode
 		for _, b := range choices {
 			labels = append(labels, strconv.Itoa(b))
 		}
-		bi := s.Sink.SelectOption("Thinking token budget", labels)
+		bi := sink.SelectOption("Thinking token budget", labels)
 		if bi <= 0 { // row 0 is "← Back"; a dismissal is treated the same way
 			return config.ReasoningConfig{}, true
 		}
@@ -900,8 +952,8 @@ func reasoningSubmenu(s *ChatSession, key string, keep map[string]any, caps mode
 		key, val, found := strings.Cut(line, "=")
 		key = strings.TrimSpace(key)
 		if !found || key == "" {
-			s.Sink.WriteText(ui.InfoStyle.Render("Expected key=value"))
-			s.Sink.WriteNewline()
+			sink.WriteText(ui.InfoStyle.Render("Expected key=value"))
+			sink.WriteNewline()
 			return config.ReasoningConfig{}, true
 		}
 		eb := map[string]any{}
@@ -913,8 +965,8 @@ func reasoningSubmenu(s *ChatSession, key string, keep map[string]any, caps mode
 		saved.ExtraBody = eb
 		config.SetReasoning(saved)
 		config.Save()
-		s.Sink.WriteText(ui.OkStyle.Render("Extra body set: " + key + "=" + fmt.Sprint(eb[key])))
-		s.Sink.WriteNewline()
+		sink.WriteText(ui.OkStyle.Render("Extra body set: " + key + "=" + fmt.Sprint(eb[key])))
+		sink.WriteNewline()
 		return config.ReasoningConfig{}, true // back to the mode menu
 	}
 	return config.ReasoningConfig{}, true

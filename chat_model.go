@@ -66,6 +66,19 @@ type chatModel struct {
 	copyNotice    string
 	copyNoticeErr bool
 
+	// notice is the transient line above the input: the outcome of a command
+	// run while the model was generating (see liveCommandDoneMsg). It never
+	// reaches the transcript, which belongs to the turn in flight, and clears
+	// itself after noticeTTL. noticeSeq tells a stale timer from the current
+	// notice.
+	notice    string
+	noticeSeq uint64
+
+	// inputSel is a drag selection inside the input bar. The transcript keeps
+	// its own selection; the input rows are redrawn from the model on every
+	// frame, so their selection is anchored in the rows that were drawn.
+	inputSel rowsSelection
+
 	// hit is the geometry of the clickable parts of the last frame (the mode
 	// badge and the "rows below" hint). It hangs off a pointer because View
 	// runs on a copy of the model: the mouse has to be matched against the rows
@@ -147,6 +160,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streamAttempt.Resize(msg.Width)
 			}
 		}
+		// The rows of the input bar (and with them the cells of a selection in
+		// it) belong to the frame that was drawn at the old width.
+		m.inputSel.clear()
 		m.reasoning.Resize(msg.Width, reasoningHeight(msg.Height))
 		// The markdown singleton is created at whatever width was current when
 		// it was first used: without this sync a resize keeps every rendered
@@ -185,7 +201,11 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.handleScrollKey(msg) {
 			return m, nil
 		}
-		m.input = m.input.SetSubmitDisabled(m.generating)
+		// Typing goes on while the model works: the input decides what a
+		// submit is allowed to do (see InputSubmitMsg), so it is never
+		// disabled, and the drag selection of the input bar is anchored in
+		// rows that are about to change.
+		m.inputSel.clear()
 		updated, cmd := m.input.UpdateComponent(msg)
 		m.input = updated
 		cmds = append(cmds, cmd)
@@ -205,7 +225,6 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress && inputMouse && m.hit != nil && m.hit.inputOK {
 			local := msg
 			local.Y -= m.hit.inputRow
-			m.input = m.input.SetSubmitDisabled(m.generating)
 			updated, cmd, handled := m.input.UpdateMouse(local)
 			if handled {
 				m.input = updated
@@ -256,10 +275,34 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hover = hoverNone
 				return m, nil
 			}
+			// The input bar is the one part of the frame the transcript does
+			// not own: a press there starts a selection of the typed text
+			// instead of a transcript row.
+			if row := m.inputRowAt(msg.Y); row >= 0 {
+				m.transcript.SelectionClear()
+				m.inputSel.start(row, msg.X)
+				return m, nil
+			}
 		}
 		if msg.Button == tea.MouseButtonLeft || msg.Action == tea.MouseActionRelease {
+			// A drag that began on the input bar stays there: its rows are
+			// redrawn from the model on every frame and end where it does.
+			if m.inputSel.active {
+				switch msg.Action {
+				case tea.MouseActionMotion:
+					m.inputSel.extend(m.inputRowNear(msg.Y), msg.X)
+				case tea.MouseActionRelease:
+					text := m.inputSel.text(m.inputRows())
+					m.inputSel.clear()
+					if text != "" {
+						cmds = append(cmds, copySelectionCmd(text))
+					}
+				}
+				return m, tea.Sequence(nonNil(cmds)...)
+			}
 			switch msg.Action {
 			case tea.MouseActionPress:
+				m.inputSel.clear()
 				m.transcript.SelectionStart(msg.Y, msg.X)
 			case tea.MouseActionMotion:
 				m.transcript.SelectionExtend(msg.Y, msg.X)
@@ -282,8 +325,23 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.InputSubmitMsg:
 		input := strings.TrimRight(msg.Value, "\n")
-		if strings.TrimSpace(input) == "" || m.generating {
+		if strings.TrimSpace(input) == "" {
 			return m, nil
+		}
+		if m.generating {
+			// The turn is still running, so only the commands that touch
+			// display/behaviour state may run: they are dispatched beside it and
+			// answer through the transient notice, because the transcript is
+			// being written by the model. Everything else — a prompt, a mode, a
+			// command that rewrites the conversation — waits, and the typed text
+			// stays in the input.
+			if !liveSlashCommand(input) {
+				m.input = m.input.RetainDraft()
+				return m, m.setNotice(noticeBlockedMsg(input), true)
+			}
+			m.input = m.input.ResetForNext()
+			cmds = append(cmds, m.liveCommandCmd(strings.TrimSpace(input)))
+			return m, tea.Sequence(nonNil(cmds)...)
 		}
 		if input == "exit" || input == "/exit" {
 			m.quitting = true
@@ -295,6 +353,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.transcript != nil {
 			m.transcript.Follow()
 		}
+		// Whatever the previous turn left in the notice is stale: this submit
+		// prints into the conversation like any other.
+		m.notice = ""
 		trimmed := strings.TrimSpace(input)
 		m.suppressGeneratingMsg = trimmed == "/tools" || strings.HasPrefix(trimmed, "/tools ") ||
 			trimmed == "/provider" || strings.HasPrefix(trimmed, "/provider ") ||
@@ -507,6 +568,17 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copyNoticeExpiredMsg:
 		m.copyNotice = ""
 		m.copyNoticeErr = false
+	case liveCommandDoneMsg:
+		// A command that printed nothing (a dismissed menu) has nothing to say:
+		// closing its prompt already is the feedback.
+		if strings.TrimSpace(msg.text) == "" {
+			break
+		}
+		cmds = append(cmds, m.setNotice(msg.text, false))
+	case noticeExpiredMsg:
+		if msg.seq == m.noticeSeq {
+			m.notice = ""
+		}
 	case ui.StreamModelMsg:
 		// An interactive screen asked for while the chat owns the terminal (a
 		// permission confirmation, /tools, /sessions, a typed confirm): host it
@@ -609,7 +681,9 @@ func (m chatModel) bottomPartsIndexed() ([]string, int) {
 	// The hint is only true while the input is the thing on screen: an open
 	// modal owns enter and ctrl+c.
 	if m.generating && !m.suppressGeneratingMsg && m.modal == nil {
-		parts = append(parts, ui.DimStyle.Render("generating… enter disabled, ctrl+c to interrupt"))
+		// Enter is not dead while the model works: the display/behaviour
+		// commands still run (see liveSlashCommand), everything else waits.
+		parts = append(parts, ui.DimStyle.Render("generating… /commands still run, ctrl+c to interrupt"))
 	}
 	if m.statsProviderInfo != "" {
 		statusIdx = len(parts)
@@ -628,14 +702,69 @@ func (m chatModel) bottomPartsIndexed() ([]string, int) {
 		}
 		parts = append(parts, style.Render(m.copyNotice))
 	}
+	if m.notice != "" {
+		// The notice sits right above the input, as close as possible to the
+		// command it reports, and goes away with its own timer.
+		parts = append(parts, m.notice)
+	}
 	// An open modal takes the place of the input: same frame, no nested
 	// program, so a confirmation or a menu never leaves the alt screen.
 	if m.modal != nil {
 		parts = append(parts, ui.ClampBlock(m.modal.View(), m.width))
 	} else {
-		parts = append(parts, m.input.SetSubmitDisabled(m.generating).View())
+		parts = append(parts, m.inputView())
 	}
 	return parts, statusIdx
+}
+
+// inputView draws the input bar, painting the drag selection over the rows it
+// covers. The selection is anchored in the rendered rows, so it is applied to
+// the same rendering the user dragged over.
+func (m chatModel) inputView() string {
+	view := m.input.View()
+	if !m.inputSel.active {
+		return view
+	}
+	return strings.Join(m.inputSel.highlight(splitRows(view)), "\n")
+}
+
+// inputRows is the input bar split into the rows it drew: the coordinates of an
+// input selection are rows of this rendering.
+func (m chatModel) inputRows() []string {
+	return splitRows(m.input.View())
+}
+
+func splitRows(view string) []string {
+	return strings.Split(strings.TrimRight(view, "\n"), "\n")
+}
+
+// inputRowAt maps a screen row of the last frame to the row index of the input
+// bar, or -1 when that row is not part of it (a transcript row, the status
+// rows, a clipped head, or the input is hidden behind a modal).
+func (m chatModel) inputRowAt(y int) int {
+	if m.hit == nil || !m.hit.inputOK || m.hit.inputRow < 0 {
+		return -1
+	}
+	if y < m.hit.inputRow || y >= m.hit.inputRow+m.hit.inputRows {
+		return -1
+	}
+	return y - m.hit.inputRow
+}
+
+// inputRowNear clamps a screen row to the input bar: a drag that leaves it still
+// ends on its first or last row.
+func (m chatModel) inputRowNear(y int) int {
+	if m.hit == nil || m.hit.inputRow < 0 {
+		return 0
+	}
+	row := y - m.hit.inputRow
+	if last := len(m.inputRows()) - 1; row > last {
+		row = last
+	}
+	if row < 0 {
+		row = 0
+	}
+	return row
 }
 
 // providerStatusLine draws the provider/temperature/mode row. In alt-screen
@@ -681,10 +810,11 @@ func (m chatModel) altScreenView() string {
 
 	// Like the status row, the input origin comes from the rows in this frame.
 	// It can become negative below when a long suggestion window is clipped.
-	inputInLive := -1
+	inputInLive, inputRows := -1, 0
 	if m.modal == nil && len(parts) > 0 {
 		inputView := strings.TrimRight(parts[len(parts)-1], "\n")
-		inputInLive = len(liveRows) - (strings.Count(inputView, "\n") + 1)
+		inputRows = strings.Count(inputView, "\n") + 1
+		inputInLive = len(liveRows) - inputRows
 	}
 
 	height := m.height
@@ -744,11 +874,30 @@ func (m chatModel) altScreenView() string {
 	}
 	// The mouse is matched against what was drawn, never against a
 	// recomputation that could disagree with it.
-	m.recordHit(rows, hintRow, statusRow, inputRow)
+	m.recordHit(rows, hintRow, statusRow, inputRow, inputRows)
 	if m.modal != nil {
 		ui.SetMouseViewport(m.modal, height-ui.MouseViewHeight(m.modal), height)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// liveCommandDoneMsg carries the output of a command run while the model was
+// generating: it becomes the transient notice above the input instead of a
+// block in the transcript.
+type liveCommandDoneMsg struct {
+	text string
+}
+
+// noticeExpiredMsg clears the notice after noticeTTL. It carries the sequence
+// number of the notice it was started for, so a stale timer never clears a
+// newer one.
+type noticeExpiredMsg struct{ seq uint64 }
+
+// noticeTTL is how long the outcome of a live command stays on screen.
+const noticeTTL = 10 * time.Second
+
+func noticeExpired(seq uint64) tea.Cmd {
+	return tea.Tick(noticeTTL, func(time.Time) tea.Msg { return noticeExpiredMsg{seq: seq} })
 }
 
 // clipboardCopiedMsg carries the outcome of a drag-selection copy.
@@ -777,6 +926,44 @@ func copySelectionCmd(text string) tea.Cmd {
 
 func copyNoticeExpired() tea.Cmd {
 	return tea.Tick(copyNoticeTTL, func(time.Time) tea.Msg { return copyNoticeExpiredMsg{} })
+}
+
+// setNotice shows text above the input for noticeTTL and returns the timer that
+// clears it. Every notice takes a fresh sequence number, so the timer of an
+// older one cannot clear the text that replaced it.
+func (m *chatModel) setNotice(text string, failed bool) tea.Cmd {
+	if failed {
+		text = ui.DeleteStyle.Render(text)
+	}
+	m.notice = ui.ClampBlock(text, m.width)
+	m.noticeSeq++
+	return noticeExpired(m.noticeSeq)
+}
+
+// noticeBlockedMsg explains why the typed command did not run while a
+// generation is in flight. It is the one thing a blocked submit says: the text
+// itself stays in the input, ready for when the turn ends.
+func noticeBlockedMsg(input string) string {
+	cmd := strings.TrimSpace(input)
+	if i := strings.IndexAny(cmd, " \t\n"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	if strings.HasPrefix(cmd, "/") {
+		return cmd + " is not available while the model is generating (ctrl+c to interrupt)"
+	}
+	return "wait for this turn to finish, or ctrl+c to interrupt"
+}
+
+// liveCommandCmd runs a command that the running generation does not block (see
+// liveSlashCommand) beside it and hands its output back as a notice.
+func (m *chatModel) liveCommandCmd(input string) tea.Cmd {
+	session := m.session
+	return func() tea.Msg {
+		if session == nil {
+			return nil
+		}
+		return liveCommandDoneMsg{text: session.runLiveCommand(input)}
+	}
 }
 
 // modalDoneMsg reports that the hosted modal finished: its reply waits to be
@@ -838,7 +1025,8 @@ func (m chatModel) modalSize() tea.WindowSizeMsg {
 // modal that finished.
 func isChatOwnedMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case modalDoneMsg, ui.StreamModelMsg, clipboardCopiedMsg, copyNoticeExpiredMsg:
+	case modalDoneMsg, ui.StreamModelMsg, clipboardCopiedMsg, copyNoticeExpiredMsg,
+		liveCommandDoneMsg, noticeExpiredMsg:
 		return true
 	}
 	return isChatStreamMsg(msg)

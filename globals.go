@@ -87,6 +87,14 @@ type ChatSession struct {
 	// per-tool visibility can keep git_init/git_clone available for bootstrapping.
 	gitInRepo atomic.Bool
 	Sink      types.OutputSink
+	// liveCommandSink redirects a slash command's output while the model is
+	// generating (see runLiveCommand): the transcript belongs to the turn in
+	// flight, so the command's text is captured and shown as a transient notice
+	// instead of being committed to it. It is written and read only by the
+	// goroutine running that command, serialized by liveCommandMu; the
+	// streaming loop keeps writing to Sink, so it never sees this field.
+	liveCommandSink types.OutputSink
+	liveCommandMu   sync.Mutex
 	// RunCtx is the context of the active run. The AG-UI server sets it so that
 	// tool interactions (level-1 human-in-the-loop) can reach the run's own SSE
 	// stream and be canceled when the client disconnects. nil in the TUI.
@@ -128,6 +136,17 @@ func (s *ChatSession) runContext() context.Context {
 		return s.RunCtx
 	}
 	return context.Background()
+}
+
+// commandSink is where a slash command writes. While a live command runs (a
+// display/behaviour command a generation does not block, see runLiveCommand)
+// the session sink belongs to the model, so the command writes into the
+// capture that the chat turns into a transient notice.
+func (s *ChatSession) commandSink() types.OutputSink {
+	if s.liveCommandSink != nil {
+		return s.liveCommandSink
+	}
+	return chatSink(s)
 }
 
 func loadUserPreferences() string {

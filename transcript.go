@@ -1,12 +1,9 @@
 package main
 
 import (
-	"math"
 	"strings"
 
 	"fuckyourcli/ui"
-
-	"github.com/charmbracelet/x/ansi"
 )
 
 // transcriptMaxLines bounds the transcript kept in memory. The alternate screen
@@ -483,22 +480,16 @@ func (t *transcriptState) SelectionText() string {
 		end.row = len(t.lines) - 1
 	}
 
+	// One empty string per row the selection touches (a row whose selection
+	// starts past its end contributes nothing), so the rows keep their place in
+	// the joined text.
 	var out []string
 	for row := start.row; row <= end.row; row++ {
 		from, to, ok := t.selectionSpan(row)
 		if !ok {
 			continue
 		}
-		plain := ansi.Strip(t.lines[row])
-		width := ansi.StringWidth(plain)
-		if from >= width {
-			out = append(out, "")
-			continue
-		}
-		if to > width {
-			to = width
-		}
-		out = append(out, strings.TrimRight(ansi.Cut(plain, from, to), " "))
+		out = append(out, selectionRowText(t.lines[row], from, to))
 	}
 	text := strings.TrimRight(strings.Join(out, "\n"), "\n")
 	if strings.TrimSpace(text) == "" {
@@ -537,16 +528,7 @@ func (t *transcriptState) highlighted(i int) string {
 	if !ok {
 		return line
 	}
-	width := ansi.StringWidth(line)
-	if from >= width {
-		return line
-	}
-	if to > width {
-		to = width
-	}
-	return ansi.Cut(line, 0, from) +
-		ui.SelectionHighlight(ansi.Cut(line, from, to)) +
-		ansi.Cut(line, to, width)
+	return highlightSpan(line, from, to)
 }
 
 // selEnds returns the selection ordered top-to-bottom.
@@ -559,22 +541,13 @@ func (t *transcriptState) selEnds() (cellPos, cellPos) {
 }
 
 // selectionSpan is the [from,to) column window of row i the selection covers;
-// ok is false when the row is not part of it.
+// ok is false when the row is not part of it. The span itself is shared with the
+// input bar's selection (see selectionSpan in input_selection.go), so both copy
+// exactly the cells they highlight.
 func (t *transcriptState) selectionSpan(i int) (int, int, bool) {
 	if !t.selActive {
 		return 0, 0, false
 	}
 	start, end := t.selEnds()
-	if i < start.row || i > end.row {
-		return 0, 0, false
-	}
-	switch {
-	case start.row == end.row:
-		return start.col, end.col + 1, true
-	case i == start.row:
-		return start.col, math.MaxInt, true
-	case i == end.row:
-		return 0, end.col + 1, true
-	}
-	return 0, math.MaxInt, true
+	return selectionSpan(start, end, i)
 }
