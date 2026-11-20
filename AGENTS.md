@@ -21,7 +21,8 @@ fuckyourcli (fyc) is a Go CLI coding agent. Single Go module `fuckyourcli`, Go 1
 - `reasoning/` — provider-independent thinking intent plus per-transport wire translation (no I/O; see `reasoning/intent.go` for the model)
 - `models/` — models.dev catalog, a standalone JSON file at `store.ConfigDir()/models.json` (never embedded; refresh with `./update_catalog.sh` or `fuckyourcli models update`); informational, consumed by `/reasoning`
 - `codexversion/` — upstream Codex compatibility version, not fyc's release version; `VERSION` is embedded for offline/plain builds and refreshed before release tags. Build-time HTTP resolution is separate from Go compilation; never require Node or an installed Codex.
-- `providers/`, `mcp/`, `ui/`, `lsp/`, `modes/`, `store/`, `types/`, `agui/`
+- `mcp/` — MCP client manager. A `ClientSession` must outlive its setup context: the SDK binds the SSE hanging GET (and a stdio process) to the context given to `Connect`, so `connectSession` detaches it and bounds only the handshake with a watchdog; the manager keeps each session's cancel func and releases it on reconnect and `Shutdown`.
+- `providers/`, `ui/`, `lsp/`, `modes/`, `store/`, `types/`, `agui/`
 
 ## Conventions
 - AGENTS.md: add only guidance that is genuinely useful across tasks (non-obvious invariants, build quirks, layout); never task-type-scoped instructions or things discoverable from the code.

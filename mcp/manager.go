@@ -27,6 +27,9 @@ type MCPManager struct {
 	version  string
 	mu       sync.RWMutex
 	secrets  mcpauth.Store
+	// cancels ends the context a session's transport is bound to; nil until a
+	// connection is established for that server.
+	cancels map[string]context.CancelFunc
 }
 
 // NewMCPManager creates a new instance of MCPManager.
@@ -34,6 +37,7 @@ func NewMCPManager(version string, secrets ...mcpauth.Store) *MCPManager {
 	m := &MCPManager{
 		Sessions: make(map[string]*mcp.ClientSession),
 		Clients:  make(map[string]*mcp.Client),
+		cancels:  make(map[string]context.CancelFunc),
 		version:  version,
 	}
 	if len(secrets) > 0 {
@@ -63,27 +67,91 @@ func (m *MCPManager) Initialize(ctx context.Context, configs []types.MCPServerCo
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
 			transport, err := m.buildTransport(cfg)
 			if err != nil {
 				failures[i] = fmt.Errorf("MCP server %s: %w", cfg.Name, err)
 				return
 			}
-			client := mcp.NewClient(&mcp.Implementation{Name: "fuckyourcli", Version: m.version}, nil)
-			session, err := client.Connect(serverCtx, transport, nil)
+			session, client, cancel, err := connectSession(ctx, transport, m.version, connectSetupTimeout)
 			if err != nil {
 				failures[i] = fmt.Errorf("failed to connect to MCP server %s: %w", cfg.Name, err)
 				return
 			}
-			m.mu.Lock()
-			m.Sessions[cfg.Name] = session
-			m.Clients[cfg.Name] = client
-			m.mu.Unlock()
+			m.storeSession(cfg.Name, session, client, cancel)
 		}()
 	}
 	wg.Wait()
 	return errors.Join(failures...)
+}
+
+// connectSetupTimeout bounds the handshake only, never the session's lifetime.
+const connectSetupTimeout = 30 * time.Second
+
+// connectSession connects a client over transport and returns the session with
+// the cancel func that ends its lifetime.
+//
+// The SDK ties the SSE hanging GET (and a stdio process) to the context handed
+// to Connect, so cancelling that context after the handshake kills the session
+// (streamable HTTP detaches it itself, SSE does not). The context is therefore
+// detached from ctx and cancelled only by two watchers, both disarmed once the
+// handshake completes: the caller's cancellation and the setup deadline.
+func connectSession(ctx context.Context, transport mcp.Transport, version string, setupTimeout time.Duration) (*mcp.ClientSession, *mcp.Client, context.CancelFunc, error) {
+	lifetime, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	var mu sync.Mutex
+	settingUp := true
+	abortSetup := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if settingUp {
+			cancel()
+		}
+	}
+	watchdog := time.AfterFunc(setupTimeout, abortSetup)
+	stopParent := context.AfterFunc(ctx, abortSetup)
+	client := mcp.NewClient(&mcp.Implementation{Name: "fuckyourcli", Version: version}, nil)
+	session, err := client.Connect(lifetime, transport, nil)
+	mu.Lock()
+	settingUp = false
+	mu.Unlock()
+	watchdog.Stop()
+	stopParent()
+
+	switch {
+	case ctx.Err() != nil:
+		// The caller gave up while connecting: its error is the reason.
+		if session != nil {
+			session.Close()
+		}
+		cancel()
+		return nil, nil, nil, ctx.Err()
+	case lifetime.Err() != nil:
+		// The watchdog fired: the handshake ran into the setup timeout.
+		if session != nil {
+			session.Close()
+		}
+		cancel()
+		return nil, nil, nil, fmt.Errorf("connection setup timed out after %v", setupTimeout)
+	case err != nil:
+		cancel()
+		return nil, nil, nil, err
+	}
+	return session, client, cancel, nil
+}
+
+// storeSession installs a new session for name, ending the previous one's
+// transport context so a replaced connection cannot linger.
+func (m *MCPManager) storeSession(name string, session *mcp.ClientSession, client *mcp.Client, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if old, ok := m.cancels[name]; ok {
+		old()
+	}
+	if m.cancels == nil {
+		m.cancels = make(map[string]context.CancelFunc)
+	}
+	m.Sessions[name] = session
+	m.Clients[name] = client
+	m.cancels[name] = cancel
 }
 
 func (m *MCPManager) httpClient(cfg types.MCPServerConfig) *http.Client {
@@ -280,7 +348,6 @@ func (m *MCPManager) CallTool(ctx context.Context, prefixedName string, argument
 func (m *MCPManager) reconnect(ctx context.Context, serverName string) error {
 	m.mu.RLock()
 	oldSession, hasSession := m.Sessions[serverName]
-	client := m.Clients[serverName]
 	// Look for the config for this server
 	var cfg *types.MCPServerConfig
 	for i := range m.Configs {
@@ -300,25 +367,17 @@ func (m *MCPManager) reconnect(ctx context.Context, serverName string) error {
 		oldSession.Close()
 	}
 
-	client = mcp.NewClient(&mcp.Implementation{
-		Name:    "fuckyourcli",
-		Version: m.version,
-	}, nil)
-
 	t, err := m.buildTransport(*cfg)
 	if err != nil {
 		return fmt.Errorf("build transport: %w", err)
 	}
 
-	session, err := client.Connect(ctx, t, nil)
+	session, client, cancel, err := connectSession(ctx, t, m.version, connectSetupTimeout)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 
-	m.mu.Lock()
-	m.Sessions[serverName] = session
-	m.Clients[serverName] = client
-	m.mu.Unlock()
+	m.storeSession(serverName, session, client, cancel)
 
 	return nil
 }
@@ -468,7 +527,12 @@ func (m *MCPManager) Shutdown(ctx context.Context) {
 	for _, session := range m.Sessions {
 		session.Close()
 	}
+	for _, cancel := range m.cancels {
+		cancel()
+	}
 	m.Sessions = make(map[string]*mcp.ClientSession)
+	m.Clients = make(map[string]*mcp.Client)
+	m.cancels = make(map[string]context.CancelFunc)
 }
 
 // IsMCPTool checks if a tool belongs to an MCP server (based on the prefix).

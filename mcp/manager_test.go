@@ -560,6 +560,53 @@ func TestInitializeHTTPTransportsAndShutdown(t *testing.T) {
 	}
 }
 
+// The context given to Initialize only bounds the handshake: the SDK binds the
+// SSE hanging GET to the context it receives, so a session must survive its
+// setup context being cancelled, or the first call after startup needs a
+// reconnect (and can hit the server's "session not found" in the race).
+func TestSessionOutlivesSetupContext(t *testing.T) {
+	for _, transport := range []string{"sse", "streamableHttp"} {
+		t.Run(transport, func(t *testing.T) {
+			endpoint := serveHTTPServer(t, echoServer(), transport)
+			manager := managerForTest(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cfg := types.MCPServerConfig{Name: "http", Transport: transport, Endpoint: endpoint}
+			if err := manager.Initialize(ctx, []types.MCPServerConfig{cfg}); err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+			if err := manager.Sessions["http"].Ping(context.Background(), &sdk.PingParams{}); err != nil {
+				t.Fatalf("session died after its setup context was cancelled: %v", err)
+			}
+			result, err := manager.CallTool(context.Background(), "http__echo__path", map[string]any{"path": "alive"})
+			if err != nil || result != "alive" {
+				t.Fatalf("CallTool = %q, %v", result, err)
+			}
+		})
+	}
+}
+
+type blockingTransport struct{}
+
+func (blockingTransport) Connect(ctx context.Context) (sdk.Connection, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestConnectSessionSetupTimeout(t *testing.T) {
+	start := time.Now()
+	session, client, cancel, err := connectSession(context.Background(), blockingTransport{}, "test-version", 50*time.Millisecond)
+	if err == nil || session != nil || client != nil || cancel != nil {
+		t.Fatalf("hung handshake = %v, %v, %v, %v", session, client, cancel, err)
+	}
+	requireErrorContains(t, err, "connection setup timed out")
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("setup timeout took %v", elapsed)
+	}
+}
+
 func stdioTestConfig(t *testing.T, transport string) types.MCPServerConfig {
 	t.Helper()
 	executable, err := os.Executable()
