@@ -62,26 +62,26 @@ func manageCLISettings() {
 	}
 }
 
-// manageAltScreen switches the chat UI between the inline REPL (default) and the
-// alt-screen full TUI (config: "alt_screen": true). The choice applies to the
+// manageAltScreen switches the chat UI between the alt-screen full TUI (default)
+// and the inline REPL (config: "alt_screen": false). The choice applies to the
 // next chat start.
 func manageAltScreen() {
 	idx := ui.SelectOption("Chat TUI rendering", []string{
-		"Inline REPL (default): output stays in the terminal scrollback",
-		"Alt screen: full-screen TUI, transcript scrolled with pgup/pgdn",
+		"Alt screen (default): full-screen TUI, transcript scrolled with pgup/pgdn",
+		"Inline REPL: output stays in the terminal scrollback",
 		"← Back",
 	})
 	if idx != 0 && idx != 1 {
 		return
 	}
-	SetAltScreen(idx == 1)
+	SetAltScreen(idx == 0)
 	if err := SaveE(); err != nil {
 		fmt.Println(ui.ErrorStyle.Render("Could not save chat TUI setting: " + err.Error()))
 		return
 	}
-	label := "inline REPL"
+	label := "alt screen"
 	if idx == 1 {
-		label = "alt screen"
+		label = "inline REPL"
 	}
 	fmt.Println(ui.OkStyle.Render("Chat TUI: " + label + " (takes effect on the next chat)"))
 }

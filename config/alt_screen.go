@@ -2,8 +2,8 @@ package config
 
 // AltScreenEnabled reports whether the chat UI runs in the terminal's alternate
 // screen buffer (full-screen TUI with an in-app scrollable transcript) instead
-// of the default inline REPL, whose output stays in the terminal scrollback.
-// Default: false.
+// of the inline REPL, whose output stays in the terminal scrollback.
+// Default: true.
 func AltScreenEnabled() bool {
 	return config.AltScreen
 }

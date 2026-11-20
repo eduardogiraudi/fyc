@@ -25,6 +25,7 @@ func defaults() Config {
 	return Config{
 		Schema:                             CurrentSchemaVersion,
 		CompactBanner:                      true,
+		AltScreen:                          true,
 		MaxMedia:                           DefaultMaxMedia,
 		Provider:                           ProviderOpenAICompatible,
 		Model:                              "",

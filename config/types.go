@@ -139,7 +139,9 @@ type Config struct {
 	AskFileWriteEach bool         `json:"ask_file_write_each"`
 	CompactBanner    bool         `json:"compact_banner"`
 	// AltScreen runs the chat UI in the terminal's alternate screen buffer: a
-	// full-screen TUI whose transcript scrolls in-app. Off by default, which
+	// full-screen TUI whose transcript scrolls in-app. On by default; setting it
+	// to false keeps the inline REPL whose output stays in the terminal
+	// scrollback.
 	// keeps the inline REPL whose output stays in the terminal scrollback.
 	AltScreen bool `json:"alt_screen"`
 	// MaxMedia bounds the recent image attachments sent with each request.
@@ -248,7 +250,7 @@ func (Config) SchemaVersion() int { return CurrentSchemaVersion }
 // UnmarshalJSON supplies defaults for optional settings even in current-schema files.
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type plain Config
-	decoded := plain{CompactBanner: true, MaxMedia: DefaultMaxMedia}
+	decoded := plain{CompactBanner: true, MaxMedia: DefaultMaxMedia, AltScreen: true}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}

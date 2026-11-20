@@ -126,9 +126,8 @@ func main() {
 	}
 
 	cfg := config.Get()
-	// altScreen switches the chat between the inline REPL (default) and the
-	// full-screen TUI. In alt-screen mode nothing may be printed before the
-	// program takes over the terminal: the start-up notices are seeded into the
+	// altScreen switches the chat between the full-screen TUI (default) and the
+	// inline REPL. In alt-screen mode nothing may be printed before the
 	// chat transcript instead (see emit).
 	altScreen := cfg.AltScreen
 	// altSeed keeps the seed order: text blocks and expandable tool results
