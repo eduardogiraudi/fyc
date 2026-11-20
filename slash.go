@@ -205,6 +205,16 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		return true, ""
 	}
 
+	// Handle /usage command
+	if input == "/usage" || strings.HasPrefix(input, "/usage ") {
+		if strings.TrimSpace(strings.TrimPrefix(input, "/usage")) != "" {
+			sinkLine(s.Sink, ui.InfoStyle.Render("Usage: /usage"))
+		} else {
+			showUsage(s)
+		}
+		return true, ""
+	}
+
 	// Handle /sub command
 	if input == "/sub" || strings.HasPrefix(input, "/sub ") {
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/sub"))

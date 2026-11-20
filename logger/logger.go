@@ -125,6 +125,7 @@ type Event struct {
 	CompletionTokens int    `json:"completion_tokens,omitempty"`
 	CachedTokens     int    `json:"cached_tokens,omitempty"`
 	CacheWriteTokens int    `json:"cache_write_tokens,omitempty"`
+	ContextTokens    int    `json:"context_tokens,omitempty"`
 	ToolCalls        int    `json:"tool_calls,omitempty"`
 	FinishReason     string `json:"finish_reason,omitempty"`
 	Interrupted      bool   `json:"interrupted,omitempty"`
@@ -259,7 +260,7 @@ func (r *request) finish(ctx context.Context, result *types.StreamResult, callEr
 	e := Event{Type: "request_finished", DurationMS: time.Since(r.start).Milliseconds()}
 	if result != nil {
 		e.PromptTokens, e.CompletionTokens, e.CachedTokens = result.PromptTokens, result.CompletionTokens, result.CachedTokens
-		e.CacheWriteTokens = result.CacheWriteTokens
+		e.CacheWriteTokens, e.ContextTokens = result.CacheWriteTokens, result.ContextTokens
 		e.ToolCalls, e.FinishReason, e.Interrupted = len(result.ToolCalls), result.FinishReason, result.Interrupted
 	}
 	if callErr != nil {
@@ -294,7 +295,13 @@ func (r *request) appendEvent(e Event) error {
 	if err != nil {
 		return err
 	}
-	return appendLine(filepath.Join(r.dir(), "events.jsonl"), append(data, '\n'))
+	if err := appendLine(filepath.Join(r.dir(), "events.jsonl"), append(data, '\n')); err != nil {
+		return err
+	}
+	if e.Type == eventFinished || e.Type == eventFailed {
+		return recordUsage(e)
+	}
+	return nil
 }
 
 // Repair only an unfinished last line after a crash; complete records stay intact.

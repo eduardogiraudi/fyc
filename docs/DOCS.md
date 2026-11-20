@@ -328,6 +328,7 @@ Inside the chat:
 | `/hooks` | Open the pre/post tool-execution hooks editor from chat. |
 | `/sysprompt` | Edit the base system prompt (persona) from chat. |
 | `/compact` | Summarize the conversation into a structured handoff and replace the history with it. |
+| `/usage` | Show token usage as a table: requests, input, output, cache hit rate and cache writes for all time, the current calendar month and the current session (its sub-agents and compaction requests listed separately when present). Tokens only: no cost is estimated, since prices vary by provider and endpoint. Input is the whole prompt, cached tokens included. All time counts requests since the first one recorded (shown under the table); requests logged before `/usage` existed are counted only while their conversation logs are still on disk. |
 | `/model` | Switch model for the current provider. |
 | `/provider` | Switch provider and model. |
 | `/mode [name]` | List modes or activate a persistent mode. Use `/mode chat` to return to normal chat. |
@@ -624,6 +625,7 @@ Configured MCP servers can be enabled/disabled from the config UI. MCP resource 
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/blobs/<sha256>` | Content-addressed image payloads referenced by messages (garbage-collected when unreferenced). |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/chat.json` | Legacy single-file chat history: migrated into `sessions/` on first read, then renamed `chat.json.migrated`. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/logs/<session-id>/events.jsonl` | One diagnostic stream per conversation, shared by its main agent, sub-agents and compaction requests. Resuming appends to the same stream. |
+| `${XDG_CACHE_HOME:-~/.cache}/fyc/usage.json` | Per-day token totals behind `/usage` (requests, input, output, cache read/write; never prompts, responses or cost). It lives outside the conversation logs so the all-time and monthly figures survive log pruning and deleted sessions; when missing or corrupt it is rebuilt from the logs still on disk. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/logs/<session-id>/responses/<request-id>.json` | Normalized response dumps, only when `FYC_LOG_DEBUG=1`; not raw HTTP payloads. |
 | `%ProgramData%\fyc\runner\fuckyourcli.exe` *(Windows)* | Read+execute copy of the binary the sandbox runs as its runner; installed by `fuckyourcli sandbox setup`, removed by `fuckyourcli sandbox reset`. |
 | `%USERPROFILE%\.fyc\.sandbox\` *(Windows)* | Sandbox setup marker (`setup.json`) and setup log; `%USERPROFILE%\.fyc\.sandbox-secrets\sandbox_users.json` holds the DPAPI-protected credentials. |
@@ -718,6 +720,7 @@ curl -N http://127.0.0.1:8787/ \
 | `updater/`, `update_cmd.go` | `fuckyourcli status` / `fuckyourcli update`: public release lookup and asset download through the GitHub API without authentication, SHA-256 verification against `checksums.txt`, and in-place binary replacement. |
 | `streaming.go` | Provider dispatch and streaming/tool-call loops. |
 | `tokens.go` | Local token estimation (text, messages, images, tool schemas) used for the compaction threshold. |
+| `usage_cmd.go` | `/usage`: all-time, monthly and session token usage (no cost), read from `logger`'s usage ledger and the conversation's event stream. |
 | `compaction.go` | `/compact` implementation (`compactContext`) and the auto-compaction trigger with its anti-loop guard (`maybeAutoCompact`). |
 | `compaction_responder.go` | The compaction request itself: resolves the compactor from `config.Get()` on every attempt, applies the failure policy (retry once with the active model, or abort) and reports which model wrote the summary. |
 | `config/` | Persistent config, tool state, provider/model switching, provider setup, MCP setup. |
@@ -749,7 +752,7 @@ curl -N http://127.0.0.1:8787/ \
 | `agui_serve.go` | `serve` command (`runServe`) and the `aguiRunner` that maps each HTTP run onto a per-thread `ChatSession` + `streamChat`. |
 | `agui_interactor.go` | The `tools.Interactor` implementation that adapts tool prompts to the broker payloads and falls back to the deterministic headless policy. |
 | `tools/interact.go` | The `Interactor` abstraction that routes tool prompts (approvals, typed confirmations, questionary) to the TUI or to the headless server policy. |
-| `logger/` | Conversation-scoped provider diagnostics, opt-in normalized response dumps, redaction and whole-session retention. |
+| `logger/` | Conversation-scoped provider diagnostics, opt-in normalized response dumps, redaction and whole-session retention, plus the per-day usage ledger (`usage.go`) behind `/usage`. |
 | `types/` | Shared tool, message, provider, stream, and MCP types. |
 | `tests/`, `tools/*_test.go` | Test coverage. |
 
