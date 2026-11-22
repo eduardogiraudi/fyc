@@ -190,6 +190,7 @@ The configuration flow can manage:
 - one or more OpenAI-compatible Chat Completions providers with name, base URL, optional API key, and default model
 - one or more OpenAI Responses API-compatible providers
 - one or more Anthropic Messages API providers
+- an optional `models_url` on every provider entry: the full URL of its model list, for providers that do not publish it under the chat base URL (Azure deployments, GitHub Models, a separate catalog host, or a list that needs a query string). It is used verbatim, query string included, so a bearer key still authenticates the same way. Without it the list is fetched from `<base_url>/models`, and a base URL that already carries the chat endpoint (`…/chat/completions`, `…/responses`, `…/messages`) has that suffix swapped. Edit it under **Manage Providers → Edit → Models URL** (a single `-` resets it); it is also asked when creating a provider in the setup wizard.
 - OpenAI Codex OAuth tokens and model
 - global temperature
 - reasoning / thinking settings
@@ -354,7 +355,16 @@ Inside the chat:
 
 A running turn does not lock the input. The commands that only read or change display and behaviour state — `/help`, `/auto`, `/airplane`, `/sub`, `/tools`, `/hooks`, `/sysprompt`, `/delay`, `/temp`, `/reasoning` and `/usage` — still run while the model works, and the turn keeps going. Their output is not written into the conversation, which the turn is writing at that moment: it appears as a transient notice right above the input bar (in both the alt-screen TUI and the inline REPL) for ten seconds, and nothing of it is added to the session. An interactive menu opened that way (`/tools`, `/reasoning`, `/hooks`, `/sysprompt`) behaves exactly as it does when idle.
 
-Everything else waits for the model: a normal prompt, the modes (`/mode`, `/plan`, `/debug`, `/deep`, `/tutorial` — they inject their instructions and their tool policy into the turn in flight), and every command that rewrites the conversation or the provider: `/clear`, `/compact`, `/retry`, `/sessions`, `/skills`, `/model`, `/provider` and `/exit`. Sending one of them while the model works does not lose the draft: the text stays in the input with a notice saying why it did not run, and `Enter` sends it once the turn is over. `Ctrl+C` still interrupts the turn.
+## Status rows
+
+Above the input the chat keeps the provider row (`[Provider: …] [Temp: …] [Mode: …]`), the token stats of the last request and, when configured, the status-bar hook line. Right under the provider row sits the context gauge, drawn only when the models.dev catalog documents the active model's context window:
+
+```
+[ctx ██████████░░░░░░] 62% 79.4k/128k tokens
+```
+
+The figure is the same context size the compaction trigger uses (the provider's own prompt count extended with the local estimate, see [Auto-compaction](#auto-compaction)), against the `limit.context` of the catalog entry for the model that would actually be sent. The entry is picked for the active connection, not by model name alone: first the catalog provider that owns the provider's base URL (by host), then, for Ollama endpoints and `-cloud` models, `ollama-cloud`, then the model's first-party provider (`deepseek-*` → `deepseek`, `mistral-*` → `mistral`…), and only then any provider that lists the model. A step that finds the provider but no window falls through to the next. So a DeepSeek model reached through a Mistral key or a gateway still shows DeepSeek's own window, while a host that documents its own (smaller) window for the model wins when the base URL matches it. The bar turns yellow from 60% and red from 85%. It is re-measured after every turn and whenever the provider row changes (`/model`, `/provider`, `/temp`, `Ctrl+O`); a model the catalog does not describe — or a catalog that is missing entirely — draws no row at all, never a gauge without a maximum the user could trust.
+
 ## Automatic retry
 
 Two layers retry automatically, both bounded and both visible on the spinner as `retrying ... (n/N) in ...`:

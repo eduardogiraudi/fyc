@@ -366,3 +366,50 @@ func TestCurrentSchemaMissingMidTurnCompactionIsDisabled(t *testing.T) {
 		t.Fatal("missing setting enabled mid-turn compaction")
 	}
 }
+
+// TestModelsURLRoundTrip keeps the optional models_url of a provider entry: it
+// is the escape hatch for providers that publish the model list at a URL other
+// than <base_url>/models.
+func TestModelsURLRoundTrip(t *testing.T) {
+	withConfigDir(t)
+	AddOpenAICompatibleProvider("Proxy", "https://proxy.example/v1", "k", "m", "https://catalog.example/models")
+	AddAnthropicProvider("Claude proxy", "https://claude.example/v1", "k", "c", "https://catalog.example/anthropic/models")
+	if err := SaveE(); err != nil {
+		t.Fatalf("SaveE: %v", err)
+	}
+
+	config = defaults()
+	if err := LoadE(); err != nil {
+		t.Fatalf("LoadE: %v", err)
+	}
+	if got := config.OpenAICompatibleProviders[0].ModelsURL; got != "https://catalog.example/models" {
+		t.Fatalf("openai models_url = %q", got)
+	}
+	if got := config.AnthropicProviders[0].ModelsURL; got != "https://catalog.example/anthropic/models" {
+		t.Fatalf("anthropic models_url = %q", got)
+	}
+}
+
+// TestModelsURLMigrationKeepsSchema15Entries upgrades a file written before
+// models_url existed: the entries survive and the override stays empty, so the
+// listing keeps deriving <base_url>/models.
+func TestModelsURLMigrationKeepsSchema15Entries(t *testing.T) {
+	dir := withConfigDir(t)
+	legacy := `{"schema":15,"provider":"openai_compatible","model":"m","active_provider_name":"P",` +
+		`"openai_compatible_providers":[{"name":"P","base_url":"https://p.example/v1","api_key":"k","model":"m"}]}`
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := LoadE(); err != nil {
+		t.Fatalf("LoadE: %v", err)
+	}
+	if len(config.OpenAICompatibleProviders) != 1 {
+		t.Fatalf("providers = %+v", config.OpenAICompatibleProviders)
+	}
+	if got := config.OpenAICompatibleProviders[0].ModelsURL; got != "" {
+		t.Fatalf("models_url = %q, want empty", got)
+	}
+	if config.Schema != CurrentSchemaVersion {
+		t.Fatalf("schema = %d, want %d", config.Schema, CurrentSchemaVersion)
+	}
+}

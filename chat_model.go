@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"fuckyourcli/config"
 	"fuckyourcli/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,7 +45,14 @@ type chatModel struct {
 	statsProviderInfo    string
 	statsTokenText       string
 	statsHookText        string
-	subagentPanel        *ui.SubagentPanel
+	// contextUsed/contextMax feed the context gauge drawn under the provider
+	// line. Both are re-measured on every stats update (a finished turn, a
+	// model switch, a settings change) instead of at render time: the estimate
+	// walks the whole history, and View runs on every keystroke. A zero max
+	// means the catalog does not document the window, and no gauge is drawn.
+	contextUsed   int
+	contextMax    int
+	subagentPanel *ui.SubagentPanel
 
 	// transcript is non-nil only in alt-screen mode (config alt_screen): the
 	// completed output is kept here, in the running program, because the
@@ -91,7 +99,7 @@ type chatModel struct {
 }
 
 func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []string, sp ui.SuggestionProvider) chatModel {
-	return chatModel{
+	m := chatModel{
 		session:           session,
 		sink:              sink,
 		input:             ui.NewInputModel(history, sp),
@@ -100,6 +108,17 @@ func newChatModel(session *ChatSession, sink *ui.TerminalOutputSink, history []s
 		reasoning:         ui.NewReasoningView(80, 7),
 		statsProviderInfo: currentProviderLine(),
 	}
+	m.refreshContextBar()
+	return m
+}
+
+// refreshContextBar re-measures the context the next request would carry and
+// the window the active model documents for it. It runs where the status rows
+// are updated, never inside View: the estimate walks the whole history, and a
+// resumed session has hundreds of messages in it.
+func (m *chatModel) refreshContextBar() {
+	m.contextUsed = contextTokens(m.session)
+	m.contextMax = contextWindowTokens(config.Get())
 }
 
 // enableAltScreen switches the chat to the full-screen transcript: completed
@@ -309,13 +328,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.transcript.SelectionExtend(msg.Y, msg.X)
 			case tea.MouseActionRelease:
 				// The terminal has no clipboard of its own in alt screen, so a
-				// selection is only useful if it is copied on release.
+				// selection is only useful if it is copied on release. The text
+				// now lives in the clipboard, so the highlight goes away with it.
 				text := m.transcript.SelectionText()
-				if text == "" {
-					m.transcript.SelectionClear()
-					break
+				m.transcript.SelectionClear()
+				if text != "" {
+					cmds = append(cmds, copySelectionCmd(text))
 				}
-				cmds = append(cmds, copySelectionCmd(text))
 			}
 		}
 		return m, tea.Sequence(nonNil(cmds)...)
@@ -381,6 +400,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.finishReasoningCmd())
 		m.clearTransient()
 		m.statsProviderInfo = currentProviderLine()
+		// Not every provider reports prompt tokens, and then no stats message
+		// arrives at all: the gauge still has to follow the history it grew.
+		m.refreshContextBar()
 
 	case ui.StreamAttemptBeginMsg:
 		supported := m.transcript != nil && m.streamAttempt == nil
@@ -503,6 +525,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.TokenStats != "" {
 			m.statsTokenText = msg.TokenStats
 		}
+		// The stats arrive at the end of a turn and on every change of the
+		// provider row (model switch, temperature, auto mode), which is exactly
+		// when the gauge has to be re-measured.
+		m.refreshContextBar()
 
 	case ui.StreamHookLineMsg:
 		// A background refresh of the status-bar hook: an empty text clears the
@@ -686,9 +712,28 @@ func (m chatModel) bottomPartsIndexed() ([]string, int) {
 		// commands still run (see liveSlashCommand), everything else waits.
 		parts = append(parts, ui.DimStyle.Render("generating… /commands still run, ctrl+c to interrupt"))
 	}
+	copyLine := ""
+	if m.copyNotice != "" {
+		style := ui.DimStyle
+		if m.copyNoticeErr {
+			style = ui.DeleteStyle
+		}
+		copyLine = style.Render(m.copyNotice)
+	}
 	if m.statsProviderInfo != "" {
 		statusIdx = len(parts)
 		parts = append(parts, m.providerStatusLine())
+		// The gauge belongs to the provider row it sits under: when the catalog
+		// does not document the model's window, no row is added at all. The last
+		// copy confirmation rides beside it instead of claiming a row of its own.
+		if bar := ui.RenderContextBar(m.contextUsed, m.contextMax); bar != "" {
+			if copyLine != "" {
+				parts = append(parts, bar+" "+copyLine)
+				copyLine = ""
+			} else {
+				parts = append(parts, bar)
+			}
+		}
 	}
 	if m.statsTokenText != "" {
 		parts = append(parts, ui.InfoStyle.Render(m.statsTokenText))
@@ -696,12 +741,8 @@ func (m chatModel) bottomPartsIndexed() ([]string, int) {
 	if m.statsHookText != "" {
 		parts = append(parts, ui.HookStyle.Render(m.statsHookText))
 	}
-	if m.copyNotice != "" {
-		style := ui.DimStyle
-		if m.copyNoticeErr {
-			style = ui.DeleteStyle
-		}
-		parts = append(parts, style.Render(m.copyNotice))
+	if copyLine != "" {
+		parts = append(parts, copyLine)
 	}
 	if m.notice != "" {
 		// The notice sits right above the input, as close as possible to the

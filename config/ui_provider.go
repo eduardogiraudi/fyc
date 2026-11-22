@@ -165,17 +165,17 @@ func fetchModelsForRef(ref providerRef) ([]string, error) {
 	case kindAnthropic:
 		p := config.AnthropicProviders[ref.index]
 		fmt.Println(ui.InfoStyle.Render("Fetching available Anthropic models..."))
-		return providers.GetAnthropicModels(p.BaseURL, p.APIKey)
+		return providers.GetAnthropicModels(modelsEndpoint(p), p.APIKey)
 
 	case kindResponses:
 		p := config.OpenAIResponsesCompatibleProviders[ref.index]
 		fmt.Println(ui.InfoStyle.Render("Fetching available models..."))
-		return providers.GetOpenAIResponsesCompatibleModels(p.BaseURL, p.APIKey)
+		return providers.GetOpenAIResponsesCompatibleModels(modelsEndpoint(p), p.APIKey)
 
 	case kindOpenAI:
 		p := config.OpenAICompatibleProviders[ref.index]
 		fmt.Println(ui.InfoStyle.Render("Fetching available models..."))
-		return providers.GetOpenAICompatibleModels(p.BaseURL, p.APIKey)
+		return providers.GetOpenAICompatibleModels(modelsEndpoint(p), p.APIKey)
 	}
 	return nil, nil
 }

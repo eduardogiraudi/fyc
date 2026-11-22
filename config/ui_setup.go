@@ -93,11 +93,12 @@ func setupAnthropicConfig() bool {
 	const defaultURL = "https://api.anthropic.com/v1"
 	baseURL := inputWithDefault("Enter base URL", defaultURL)
 	apiKey := ui.InputPassword("Enter API key (leave empty if not required):")
+	modelsURL := ui.InputText("Model list URL (optional; Enter derives <base URL>/models):")
 
 	models := fetchOrInputModels(
 		func() ([]string, error) {
 			fmt.Println(ui.InfoStyle.Render("Fetching available Anthropic models..."))
-			return providers.GetAnthropicModels(baseURL, apiKey)
+			return providers.GetAnthropicModels(providers.ModelsURL(baseURL, modelsURL), apiKey)
 		},
 		providers.AnthropicDefaultModels,
 	)
@@ -109,7 +110,7 @@ func setupAnthropicConfig() bool {
 	if !ok {
 		return false
 	}
-	AddAnthropicProvider(name, baseURL, apiKey, selectedModel)
+	AddAnthropicProvider(name, baseURL, apiKey, selectedModel, modelsURL)
 	config.Provider = ProviderAnthropic
 	config.Model = selectedModel
 	config.ActiveProviderName = name
@@ -143,11 +144,12 @@ func setupNewOpenAICompatibleProvider() bool {
 	const defaultURL = "http://localhost:11434/v1"
 	baseURL := inputWithDefault("Enter base URL", defaultURL)
 	apiKey := ui.InputPassword("Enter API key (leave empty for local providers like Ollama):")
+	modelsURL := ui.InputText("Model list URL (optional; Enter derives <base URL>/models):")
 
 	models := fetchOrInputModels(
 		func() ([]string, error) {
 			fmt.Println(ui.InfoStyle.Render("Fetching available models..."))
-			return providers.GetOpenAICompatibleModels(baseURL, apiKey)
+			return providers.GetOpenAICompatibleModels(providers.ModelsURL(baseURL, modelsURL), apiKey)
 		},
 		nil,
 	)
@@ -159,7 +161,7 @@ func setupNewOpenAICompatibleProvider() bool {
 	if !ok {
 		return false
 	}
-	AddOpenAICompatibleProvider(name, baseURL, apiKey, selectedModel)
+	AddOpenAICompatibleProvider(name, baseURL, apiKey, selectedModel, modelsURL)
 	config.Provider = ProviderOpenAICompatible
 	config.Model = selectedModel
 	config.ActiveProviderName = name
@@ -194,11 +196,12 @@ func setupNewOpenAIResponsesCompatibleProvider() bool {
 	const defaultURL = "https://api.openai.com/v1"
 	baseURL := inputWithDefault("Enter base URL", defaultURL)
 	apiKey := ui.InputPassword("Enter API key (leave empty if not required):")
+	modelsURL := ui.InputText("Model list URL (optional; Enter derives <base URL>/models):")
 
 	models := fetchOrInputModels(
 		func() ([]string, error) {
 			fmt.Println(ui.InfoStyle.Render("Fetching available models..."))
-			return providers.GetOpenAIResponsesCompatibleModels(baseURL, apiKey)
+			return providers.GetOpenAIResponsesCompatibleModels(providers.ModelsURL(baseURL, modelsURL), apiKey)
 		},
 		nil,
 	)
@@ -210,7 +213,7 @@ func setupNewOpenAIResponsesCompatibleProvider() bool {
 	if !ok {
 		return false
 	}
-	AddOpenAIResponsesCompatibleProvider(name, baseURL, apiKey, selectedModel)
+	AddOpenAIResponsesCompatibleProvider(name, baseURL, apiKey, selectedModel, modelsURL)
 	config.Provider = ProviderOpenAIResponsesCompatible
 	config.Model = selectedModel
 	config.ActiveProviderName = name

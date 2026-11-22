@@ -781,41 +781,37 @@ func AnthropicDefaultModels() []string {
 	}
 }
 
-// GetAnthropicModels fetches available Anthropic models.
-func GetAnthropicModels(baseURL, apiKey string) ([]string, error) {
-	url := strings.TrimRight(baseURL, "/") + "/models"
+// GetAnthropicModels fetches the model list from endpoint, the URL returned by
+// ModelsURL (an explicit models_url, or the base URL narrowed to <base>/models).
+func GetAnthropicModels(endpoint, apiKey string) ([]string, error) {
+	url := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if url == "" {
+		return nil, fmt.Errorf("no model list endpoint configured")
+	}
+	if !strings.HasSuffix(url, "/models") {
+		url = url + "/models"
+	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("anthropic-version", anthropicVersion)
+	req.Header.Set("Accept", "application/json")
 	if apiKey != "" {
 		req.Header.Set("x-api-key", apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelsClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("models API error (%d): %s", resp.StatusCode, string(body))
-	}
-
-	var data struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
-	models := make([]string, 0, len(data.Data))
-	for _, model := range data.Data {
-		if model.ID != "" {
-			models = append(models, model.ID)
-		}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models API error (%d) from %s: %s", resp.StatusCode, url, strings.TrimSpace(string(body)))
 	}
-	return models, nil
+	return parseModelIDs(body), nil
 }

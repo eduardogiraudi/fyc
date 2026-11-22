@@ -69,6 +69,9 @@ func TestMouseDragCopiesToTheClipboard(t *testing.T) {
 	m = next.(chatModel)
 	next, cmd := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: 2, Y: 2})
 	m = next.(chatModel)
+	if m.transcript.selActive || m.transcript.SelectionText() != "" {
+		t.Fatal("the highlight outlived the copy")
+	}
 
 	msg := runMsgs(cmd)
 	if msg == nil {

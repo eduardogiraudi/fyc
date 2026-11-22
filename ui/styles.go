@@ -10,7 +10,12 @@ var (
 	TitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#fc8403"))
 	InfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	OkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#fc8403"))
-	//BarStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	// The context gauge paints its filled part with BarStyle until the window
+	// is half gone, then warns and finally alarms: the colour is the signal the
+	// user reads before the number.
+	BarStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#fc8403"))
+	BarWarnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	BarFullStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	TipStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
 	SeparatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#fc8403"))
 	ToolStyle      = lipgloss.NewStyle().

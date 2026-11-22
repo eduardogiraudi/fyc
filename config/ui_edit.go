@@ -12,10 +12,12 @@ import (
 type providerEditable interface {
 	getName() string
 	getBaseURL() string
+	getModelsURL() string
 	getModel() string
 
 	setName(v string)
 	setBaseURL(v string)
+	setModelsURL(v string)
 	setAPIKey(v string)
 	setModel(v string)
 
@@ -41,11 +43,17 @@ func (e openAIProviderEditor) setName(v string) { config.OpenAICompatibleProvide
 func (e openAIProviderEditor) setBaseURL(v string) {
 	config.OpenAICompatibleProviders[e.idx].BaseURL = v
 }
+func (e openAIProviderEditor) getModelsURL() string {
+	return config.OpenAICompatibleProviders[e.idx].ModelsURL
+}
+func (e openAIProviderEditor) setModelsURL(v string) {
+	config.OpenAICompatibleProviders[e.idx].ModelsURL = v
+}
 func (e openAIProviderEditor) setAPIKey(v string) { config.OpenAICompatibleProviders[e.idx].APIKey = v }
 func (e openAIProviderEditor) setModel(v string)  { config.OpenAICompatibleProviders[e.idx].Model = v }
 func (e openAIProviderEditor) fetchModels() ([]string, error) {
 	p := config.OpenAICompatibleProviders[e.idx]
-	return providers.GetOpenAICompatibleModels(p.BaseURL, p.APIKey)
+	return providers.GetOpenAICompatibleModels(modelsEndpoint(p), p.APIKey)
 }
 func (e openAIProviderEditor) isActiveModel(m string) bool {
 	return config.Provider == ProviderOpenAICompatible && config.Model == m
@@ -60,6 +68,12 @@ func (e responsesProviderEditor) getName() string {
 }
 func (e responsesProviderEditor) getBaseURL() string {
 	return config.OpenAIResponsesCompatibleProviders[e.idx].BaseURL
+}
+func (e responsesProviderEditor) getModelsURL() string {
+	return config.OpenAIResponsesCompatibleProviders[e.idx].ModelsURL
+}
+func (e responsesProviderEditor) setModelsURL(v string) {
+	config.OpenAIResponsesCompatibleProviders[e.idx].ModelsURL = v
 }
 func (e responsesProviderEditor) getModel() string {
 	return config.OpenAIResponsesCompatibleProviders[e.idx].Model
@@ -78,7 +92,7 @@ func (e responsesProviderEditor) setModel(v string) {
 }
 func (e responsesProviderEditor) fetchModels() ([]string, error) {
 	p := config.OpenAIResponsesCompatibleProviders[e.idx]
-	return providers.GetOpenAIResponsesCompatibleModels(p.BaseURL, p.APIKey)
+	return providers.GetOpenAIResponsesCompatibleModels(modelsEndpoint(p), p.APIKey)
 }
 func (e responsesProviderEditor) isActiveModel(m string) bool {
 	return config.Provider == ProviderOpenAIResponsesCompatible && config.Model == m
@@ -90,16 +104,22 @@ type anthropicProviderEditor struct{ idx int }
 
 func (e anthropicProviderEditor) getName() string    { return config.AnthropicProviders[e.idx].Name }
 func (e anthropicProviderEditor) getBaseURL() string { return config.AnthropicProviders[e.idx].BaseURL }
-func (e anthropicProviderEditor) getModel() string   { return config.AnthropicProviders[e.idx].Model }
-func (e anthropicProviderEditor) setName(v string)   { config.AnthropicProviders[e.idx].Name = v }
+func (e anthropicProviderEditor) getModelsURL() string {
+	return config.AnthropicProviders[e.idx].ModelsURL
+}
+func (e anthropicProviderEditor) getModel() string { return config.AnthropicProviders[e.idx].Model }
+func (e anthropicProviderEditor) setName(v string) { config.AnthropicProviders[e.idx].Name = v }
 func (e anthropicProviderEditor) setBaseURL(v string) {
 	config.AnthropicProviders[e.idx].BaseURL = v
+}
+func (e anthropicProviderEditor) setModelsURL(v string) {
+	config.AnthropicProviders[e.idx].ModelsURL = v
 }
 func (e anthropicProviderEditor) setAPIKey(v string) { config.AnthropicProviders[e.idx].APIKey = v }
 func (e anthropicProviderEditor) setModel(v string)  { config.AnthropicProviders[e.idx].Model = v }
 func (e anthropicProviderEditor) fetchModels() ([]string, error) {
 	p := config.AnthropicProviders[e.idx]
-	return providers.GetAnthropicModels(p.BaseURL, p.APIKey)
+	return providers.GetAnthropicModels(modelsEndpoint(p), p.APIKey)
 }
 func (e anthropicProviderEditor) isActiveModel(m string) bool {
 	return config.Provider == ProviderAnthropic && config.Model == m
@@ -113,7 +133,7 @@ func (e anthropicProviderEditor) syncActiveModel(m string) { config.Model = m }
 func editProvider(ed providerEditable) {
 	field := ui.SelectOption(
 		fmt.Sprintf("Editing provider '%s'. What to change?", ed.getName()),
-		[]string{"Name", "Base URL", "API Key", "Model", "← Cancel"},
+		[]string{"Name", "Base URL", "Models URL", "API Key", "Model", "← Cancel"},
 	)
 	switch field {
 	case 0: // Name
@@ -132,7 +152,25 @@ func editProvider(ed providerEditable) {
 			fmt.Println(ui.OkStyle.Render("Base URL updated"))
 		}
 
-	case 2: // API Key
+	case 2: // Models URL
+		current := ed.getModelsURL()
+		if current == "" {
+			current = "(derived from the base URL)"
+		}
+		newURL := ui.InputText(fmt.Sprintf("Model list URL now: %s. New URL (\"-\" to derive it from the base URL again):", current))
+		switch newURL {
+		case "": // dismissed: keep the current value
+		case "-":
+			ed.setModelsURL("")
+			Save()
+			fmt.Println(ui.OkStyle.Render("Models URL reset to <base URL>/models"))
+		default:
+			ed.setModelsURL(newURL)
+			Save()
+			fmt.Println(ui.OkStyle.Render("Models URL updated"))
+		}
+
+	case 3: // API Key
 		newKey := ui.InputPassword("Enter new API key (leave empty to clear):")
 		ed.setAPIKey(newKey)
 		Save()
@@ -142,10 +180,10 @@ func editProvider(ed providerEditable) {
 			fmt.Println(ui.OkStyle.Render("API key updated"))
 		}
 
-	case 3: // Model
+	case 4: // Model
 		updateProviderModel(ed)
 
-	case 4: // Cancel
+	case 5: // Cancel
 	}
 }
 
@@ -156,7 +194,12 @@ func updateProviderModel(ed providerEditable) {
 	models, err := ed.fetchModels()
 
 	if err != nil || len(models) == 0 {
-		fmt.Println(ui.InfoStyle.Render("Could not fetch models. Enter manually."))
+		if err != nil {
+			fmt.Println(ui.InfoStyle.Render("Could not fetch models: " + err.Error()))
+			fmt.Println(ui.InfoStyle.Render("If this provider publishes its model list elsewhere, set it under 'Models URL'."))
+		} else {
+			fmt.Println(ui.InfoStyle.Render("Could not fetch models. Enter manually."))
+		}
 		manual := ui.InputText("Enter model name:")
 		if manual == "" {
 			return

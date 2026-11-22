@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -139,30 +140,59 @@ func CountLines(s string, termWidth int) int {
 	return total
 }
 
-/*func RenderContextBar(used int, max int) string {
-	if max == 0 {
+// contextBarCells is the width of the gauge; the row also carries the
+// percentage and the two figures, so it stays well inside a narrow terminal.
+const contextBarCells = 16
+
+// RenderContextBar draws the context-window gauge that sits under the provider
+// line: how much of the model's prompt window the next request would occupy.
+// It returns "" when the window is unknown (max <= 0), because a bar without a
+// maximum would be a lie, and when nothing is used yet.
+func RenderContextBar(used, max int) string {
+	if max <= 0 || used <= 0 {
 		return ""
 	}
-
-	width := 30
 	ratio := float64(used) / float64(max)
-
 	if ratio > 1 {
 		ratio = 1
 	}
-
-	filled := int(ratio * float64(width))
-	empty := width - filled
-
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-
-	return fmt.Sprintf("%s  %s / %s %s",
-		BarStyle.Render("["+bar+"]"),
-		OkStyle.Render(fmt.Sprintf("%d", used)),
-		OkStyle.Render(fmt.Sprintf("%d", max)),
-		InfoStyle.Render("ctx"),
+	filled := int(math.Round(ratio * contextBarCells))
+	if filled > contextBarCells {
+		filled = contextBarCells
+	}
+	fill := BarStyle
+	switch {
+	case ratio >= 0.85:
+		fill = BarFullStyle
+	case ratio >= 0.6:
+		fill = BarWarnStyle
+	}
+	bar := fill.Render(strings.Repeat("█", filled)) +
+		GrayStyle.Render(strings.Repeat("░", contextBarCells-filled))
+	return fmt.Sprintf("%s%s%s %s %s",
+		InfoStyle.Render("[ctx "), bar, InfoStyle.Render("]"),
+		fill.Render(fmt.Sprintf("%d%%", int(math.Round(ratio*100)))),
+		InfoStyle.Render(formatTokenCount(used)+"/"+formatTokenCount(max)+" tokens"),
 	)
-}*/
+}
+
+// formatTokenCount shortens a token figure for the status rows: 812, 53.7k,
+// 128k, 1.2M. One decimal is kept only when it says something.
+func formatTokenCount(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	unit, div := "k", 1000.0
+	if n >= 1000000 {
+		unit, div = "M", 1000000.0
+	}
+	s := fmt.Sprintf("%.1f", float64(n)/div)
+	s = strings.TrimSuffix(s, ".0")
+	return s + unit
+}
 
 // RenderProviderInfo returns a formatted string showing current provider, model and mode (auto/manual)
 func RenderProviderInfo(providerInfo, temperature, mode string) string {

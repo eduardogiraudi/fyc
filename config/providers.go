@@ -44,12 +44,13 @@ func getGeminiChatModels(apiKey string) ([]string, error) {
 }
 
 // AddAnthropicProvider adds a new Anthropic Messages API provider.
-func AddAnthropicProvider(name, baseURL, apiKey, model string) {
+func AddAnthropicProvider(name, baseURL, apiKey, model string, modelsURL ...string) {
 	provider := OpenAICompatibleProviderConfig{
-		Name:    name,
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		Name:      name,
+		BaseURL:   baseURL,
+		ModelsURL: firstOrEmpty(modelsURL),
+		APIKey:    apiKey,
+		Model:     model,
 	}
 	config.AnthropicProviders = append(config.AnthropicProviders, provider)
 }
@@ -66,14 +67,32 @@ func RemoveAnthropicProvider(name string) {
 }
 
 // AddOpenAIResponsesCompatibleProvider adds a new OpenAI Responses API-compatible provider.
-func AddOpenAIResponsesCompatibleProvider(name, baseURL, apiKey, model string) {
+func AddOpenAIResponsesCompatibleProvider(name, baseURL, apiKey, model string, modelsURL ...string) {
 	provider := OpenAICompatibleProviderConfig{
-		Name:    name,
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		Name:      name,
+		BaseURL:   baseURL,
+		ModelsURL: firstOrEmpty(modelsURL),
+		APIKey:    apiKey,
+		Model:     model,
 	}
 	config.OpenAIResponsesCompatibleProviders = append(config.OpenAIResponsesCompatibleProviders, provider)
+}
+
+// firstOrEmpty returns the first optional value, for the variadic models URL of
+// the Add*Provider helpers.
+func firstOrEmpty(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
+}
+
+// modelsEndpoint resolves the model-list URL of a provider entry: the explicit
+// models_url when set, otherwise <base_url>/models. Every listing caller goes
+// through it, so a provider whose model endpoint lives elsewhere is listed the
+// same way from the /models picker, the setup wizard and the settings editor.
+func modelsEndpoint(p OpenAICompatibleProviderConfig) string {
+	return providers.ModelsURL(p.BaseURL, p.ModelsURL)
 }
 
 // RemoveOpenAIResponsesCompatibleProvider removes a Responses provider by name.
@@ -411,11 +430,7 @@ func availableModels(cfg Config) ([]string, error) {
 
 		var models []string
 		var err error
-		if activeProvider.APIKey != "" {
-			models, err = providers.GetOpenAICompatibleModels(activeProvider.BaseURL, activeProvider.APIKey)
-		} else {
-			models, err = providers.GetOpenAICompatibleModels(activeProvider.BaseURL, "")
-		}
+		models, err = providers.GetOpenAICompatibleModels(modelsEndpoint(*activeProvider), activeProvider.APIKey)
 
 		if err != nil || len(models) == 0 {
 			return []string{cfg.Model}, nil
@@ -443,7 +458,7 @@ func availableModels(cfg Config) ([]string, error) {
 		if activeProvider == nil {
 			return []string{cfg.Model}, nil
 		}
-		models, err := providers.GetOpenAIResponsesCompatibleModels(activeProvider.BaseURL, activeProvider.APIKey)
+		models, err := providers.GetOpenAIResponsesCompatibleModels(modelsEndpoint(*activeProvider), activeProvider.APIKey)
 		if err != nil || len(models) == 0 {
 			return []string{cfg.Model}, nil
 		}
@@ -479,7 +494,7 @@ func availableModels(cfg Config) ([]string, error) {
 		if activeProvider == nil {
 			return providers.AnthropicDefaultModels(), nil
 		}
-		models, err := providers.GetAnthropicModels(activeProvider.BaseURL, activeProvider.APIKey)
+		models, err := providers.GetAnthropicModels(modelsEndpoint(*activeProvider), activeProvider.APIKey)
 		if err != nil || len(models) == 0 {
 			return providers.AnthropicDefaultModels(), nil
 		}

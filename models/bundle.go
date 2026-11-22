@@ -142,6 +142,59 @@ func LookupInfo(modelID string) (providerID string, m Model, ok bool) {
 	return Cached().LookupModel(modelID)
 }
 
+// ContextWindow returns the documented prompt context window of a model, or 0
+// when the catalog does not know it. A model the catalog does not describe has
+// no window here: callers must treat zero as "unknown", never as "unlimited".
+func (c Catalog) ContextWindow(modelID string) int {
+	if _, m, ok := c.LookupModel(modelID); ok {
+		return m.Limit.Context
+	}
+	return 0
+}
+
+// ContextWindow resolves a model's context window against the cached catalog.
+func ContextWindow(modelID string) int {
+	return Cached().ContextWindow(modelID)
+}
+
+// ContextWindowIn returns the documented context window of modelID inside the
+// catalog provider providerID only, or 0 when that provider is not in the
+// catalog or does not list the model. Unlike ContextWindow it never falls back
+// to another provider: the same model is often served with a smaller window by
+// a host than by its maker, so the caller decides what the fallback is.
+func (c Catalog) ContextWindowIn(providerID, modelID string) int {
+	modelID = strings.TrimSpace(modelID)
+	p, ok := c[providerID]
+	if !ok || modelID == "" {
+		return 0
+	}
+	ids := []string{modelID}
+	if alias := cloudModelID(modelID); alias != modelID {
+		ids = append(ids, alias)
+	}
+	for _, id := range ids {
+		if m, ok := p.Models[id]; ok {
+			return m.Limit.Context
+		}
+		suffix := "/" + id
+		// Sorted keys keep the pick deterministic when several entries end
+		// with the same suffix.
+		keys := make([]string, 0, len(p.Models))
+		for k := range p.Models {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			m := p.Models[k]
+			if m.ID == id || m.CanonicalID == id || strings.HasSuffix(m.ID, suffix) ||
+				(m.CanonicalID != "" && strings.HasSuffix(m.CanonicalID, suffix)) {
+				return m.Limit.Context
+			}
+		}
+	}
+	return 0
+}
+
 // ReasoningInfo renders a short human string for the /reasoning UI, or "" when
 // the model is unknown. It is informational only and never affects the request.
 func ReasoningInfo(modelID string) string {

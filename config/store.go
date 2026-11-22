@@ -298,13 +298,15 @@ func EffectiveCompactionThreshold() int {
 	return config.CompactionThreshold
 }
 
-// AddOpenAICompatibleProvider adds a new OpenAI-compatible provider
-func AddOpenAICompatibleProvider(name, baseURL, apiKey, model string) {
+// AddOpenAICompatibleProvider adds a new OpenAI-compatible provider. The
+// optional modelsURL overrides the derived <base URL>/models listing endpoint.
+func AddOpenAICompatibleProvider(name, baseURL, apiKey, model string, modelsURL ...string) {
 	provider := OpenAICompatibleProviderConfig{
-		Name:    name,
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		Name:      name,
+		BaseURL:   baseURL,
+		ModelsURL: firstOrEmpty(modelsURL),
+		APIKey:    apiKey,
+		Model:     model,
 	}
 	config.OpenAICompatibleProviders = append(config.OpenAICompatibleProviders, provider)
 }

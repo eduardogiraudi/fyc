@@ -135,7 +135,9 @@ func (p *OpenAIResponsesCompatibleProvider) StreamChat(ctx context.Context, mess
 	return parseCodexStreamResponse(ctx, stream.body(resp.Body), p.ThinkingEnabled, sink)
 }
 
-// GetOpenAIResponsesCompatibleModels fetches available models from a Responses API-compatible provider.
-func GetOpenAIResponsesCompatibleModels(baseURL, apiKey string) ([]string, error) {
-	return GetOpenAICompatibleModels(baseURL, apiKey)
+// GetOpenAIResponsesCompatibleModels fetches the model list from endpoint, the
+// URL returned by ModelsURL. The Responses API keeps its model list on the same
+// endpoint as the Chat Completions one.
+func GetOpenAIResponsesCompatibleModels(endpoint, apiKey string) ([]string, error) {
+	return GetOpenAICompatibleModels(endpoint, apiKey)
 }

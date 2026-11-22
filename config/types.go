@@ -16,12 +16,15 @@ const (
 	ProviderCodex                     ProviderType = "codex"
 )
 
-// OpenAICompatibleProviderConfig represents a custom OpenAI-compatible provider
 type OpenAICompatibleProviderConfig struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key,omitempty"`
-	Model   string `json:"model"`
+	// ModelsURL overrides the model-list endpoint. Some providers publish the
+	// chat API and the model list at different URLs (or the list needs a query
+	// string); empty means "derive it from BaseURL" (see providers.ModelsURL).
+	ModelsURL string `json:"models_url,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+	Model     string `json:"model"`
 }
 
 // ToolHook is a single user-configured command executed around a tool call.
@@ -241,7 +244,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 15
+const CurrentSchemaVersion = 16
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.

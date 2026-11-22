@@ -19,6 +19,7 @@ import (
 	"math"
 
 	"fuckyourcli/config"
+	"fuckyourcli/reasoning"
 	"fuckyourcli/types"
 )
 
@@ -154,6 +155,18 @@ func contextTokens(s *ChatSession) int {
 		return local
 	}
 	return provider
+}
+
+// contextWindowTokens returns the context window documented by the models.dev
+// catalog for the model that would actually be sent, or 0 when the catalog does
+// not describe it. The window is looked up for the active connection first (the
+// catalog provider that owns its base URL), then in the model's first-party
+// provider, then anywhere (see reasoning.CatalogContextWindow). It is
+// informational only (the status-bar gauge): nothing in the request path or the
+// compaction trigger depends on it.
+func contextWindowTokens(cfg config.Config) int {
+	baseURL, _ := config.ActiveProviderEndpoint()
+	return reasoning.CatalogContextWindow(baseURL, cfg.ActiveChoice().Model)
 }
 
 // plausibleContextTokens reports whether a provider measurement is close enough

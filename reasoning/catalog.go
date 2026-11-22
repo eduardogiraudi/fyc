@@ -35,6 +35,42 @@ func CatalogCapabilities(baseURL, model string) (models.Capabilities, bool) {
 	return c.CapabilitiesFor(model)
 }
 
+// CatalogContextWindow resolves the documented context window of model for the
+// connection at baseURL, or 0 when the catalog does not know it. The order
+// mirrors CatalogCapabilities, so the gauge and the reasoning wizard agree on
+// which catalog entry describes the model:
+//
+//  1. the catalog provider that owns baseURL (a Mistral endpoint is described by
+//     Mistral's entry, a gateway by the gateway's own),
+//  2. ollama-cloud for Ollama endpoints and "-cloud" models,
+//  3. the first-party provider of the model's family (deepseek-* → deepseek),
+//  4. any provider that lists the model.
+//
+// A step that finds the provider but not a window falls through to the next
+// one, so a host that omits limit.context does not hide a documented window.
+// Zero stays "unknown": it is never replaced by a default.
+func CatalogContextWindow(baseURL, model string) int {
+	c := models.Cached()
+	if pid := c.ProviderIDForBaseURL(baseURL); pid != "" {
+		if n := c.ContextWindowIn(pid, model); n > 0 {
+			return n
+		}
+	}
+	provider := ProviderFromHost(baseURL)
+	if provider == FamilyOllama || (provider == FamilyLocal &&
+		(strings.HasSuffix(model, "-cloud") || strings.HasSuffix(model, ":cloud"))) {
+		if n := c.ContextWindowIn("ollama-cloud", model); n > 0 {
+			return n
+		}
+	}
+	if pid := catalogProviderForFamily(FamilyFromModel(model)); pid != "" {
+		if n := c.ContextWindowIn(pid, model); n > 0 {
+			return n
+		}
+	}
+	return c.ContextWindow(model)
+}
+
 // catalogProviderForFamily maps a family onto the models.dev provider that
 // publishes it. Without this, a global lookup returns whichever aggregator
 // (302ai, aihubmix…) happens to be listed first, whose metadata is usually a

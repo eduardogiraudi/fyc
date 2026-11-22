@@ -568,48 +568,87 @@ loop:
 	return result, nil
 }
 
-// GetOpenAICompatibleModels fetches available models from an OpenAI-compatible API
-func GetOpenAICompatibleModels(baseURL, apiKey string) ([]string, error) {
-	url := baseURL
+// GetOpenAICompatibleModels fetches the model list from endpoint, the URL
+// returned by ModelsURL: either an explicit models_url (used as-is) or the chat
+// base URL narrowed to <base>/models.
+func GetOpenAICompatibleModels(endpoint, apiKey string) ([]string, error) {
+	url := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if url == "" {
+		return nil, fmt.Errorf("no model list endpoint configured")
+	}
 	if !strings.HasSuffix(url, "/models") {
-		if strings.HasSuffix(url, "/") {
-			url = url + "models"
-		} else {
-			url = url + "/models"
-		}
+		url = url + "/models"
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelsClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var data struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models API error (%d) from %s: %s", resp.StatusCode, url, strings.TrimSpace(string(body)))
+	}
+	return parseModelIDs(body), nil
+}
 
-	var models []string
-	for _, model := range data.Data {
-		models = append(models, model.ID)
+// parseModelIDs reads the identifiers of a model-list response. The documented
+// shape is {"data":[{"id":…}]}, but providers that answer a different catalog
+// endpoint (GitHub Models, some gateways) return a bare array or a {"models":…}
+// wrapper, so all three are accepted instead of reporting an empty list.
+func parseModelIDs(body []byte) []string {
+	type entry struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	}
+	collect := func(in []entry) []string {
+		out := make([]string, 0, len(in))
+		for _, e := range in {
+			id := e.ID
+			if id == "" {
+				id = e.Slug
+			}
+			if id == "" {
+				id = e.Name
+			}
+			if id != "" {
+				out = append(out, id)
+			}
+		}
+		return out
 	}
 
-	return models, nil
+	var wrapped struct {
+		Data   []entry `json:"data"`
+		Models []entry `json:"models"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil {
+		if len(wrapped.Data) > 0 {
+			return collect(wrapped.Data)
+		}
+		if len(wrapped.Models) > 0 {
+			return collect(wrapped.Models)
+		}
+	}
+	var bare []entry
+	if err := json.Unmarshal(body, &bare); err == nil {
+		return collect(bare)
+	}
+	return nil
 }
 
 func parseXMLToolCalls(xml string, result *types.StreamResult) {

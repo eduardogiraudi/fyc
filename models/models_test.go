@@ -18,7 +18,8 @@ const sampleCatalog = `{
         "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro",
         "reasoning": true,
         "reasoning_options": [{"type":"effort","values":["low","high","max"]}],
-        "interleaved": {"field":"reasoning_content"}
+        "interleaved": {"field":"reasoning_content"},
+        "limit": {"context": 131072, "output": 8192}
       }
     }
   },
@@ -68,6 +69,21 @@ func TestParseAndLookup(t *testing.T) {
 	}
 	if _, _, ok := c.LookupModel("  "); ok {
 		t.Fatal("empty id must not match")
+	}
+}
+
+// An unknown window is zero, never a plausible-looking default: only the
+// catalog may claim a limit.
+func TestContextWindow(t *testing.T) {
+	c := parseBytes([]byte(sampleCatalog))
+	if got := c.ContextWindow("deepseek-v4-pro"); got != 131072 {
+		t.Fatalf("ContextWindow = %d, want 131072", got)
+	}
+	if got := c.ContextWindow("Llama-3.3-70B"); got != 0 {
+		t.Fatalf("a model with no limit reports %d, want 0", got)
+	}
+	if got := c.ContextWindow("does-not-exist"); got != 0 {
+		t.Fatalf("unknown model reports %d, want 0", got)
 	}
 }
 
@@ -182,5 +198,52 @@ func TestReasoningInfo(t *testing.T) {
 	}
 	if got := ReasoningInfo("unknown-model"); got != "" {
 		t.Fatalf("ReasoningInfo(unknown) = %q, want empty", got)
+	}
+}
+
+const providerScopedCatalog = `{
+  "mistral": {
+    "id": "mistral", "name": "Mistral", "api": "https://api.mistral.ai/v1",
+    "models": {
+      "mistral-large": {"id": "mistral-large", "name": "Mistral Large", "limit": {"context": 128000}}
+    }
+  },
+  "azure-host": {
+    "id": "azure-host", "name": "Host", "api": "https://host.example.com/v1",
+    "models": {
+      "deepseek-chat": {"id": "deepseek-chat", "name": "DeepSeek (host)", "limit": {"context": 32768}},
+      "vendor/deepseek-r": {"id": "vendor/deepseek-r", "name": "R", "limit": {"context": 16000}},
+      "nolimit": {"id": "nolimit", "name": "No limit"}
+    }
+  },
+  "deepseek": {
+    "id": "deepseek", "name": "DeepSeek",
+    "models": {
+      "deepseek-chat": {"id": "deepseek-chat", "name": "DeepSeek", "limit": {"context": 131072}}
+    }
+  }
+}`
+
+// The scoped lookup never leaves the provider it was given: the same model id
+// carries different windows on different hosts.
+func TestContextWindowIn(t *testing.T) {
+	c := parseBytes([]byte(providerScopedCatalog))
+	if got := c.ContextWindowIn("deepseek", "deepseek-chat"); got != 131072 {
+		t.Fatalf("first-party window = %d, want 131072", got)
+	}
+	if got := c.ContextWindowIn("azure-host", "deepseek-chat"); got != 32768 {
+		t.Fatalf("host window = %d, want 32768", got)
+	}
+	if got := c.ContextWindowIn("azure-host", "deepseek-r"); got != 16000 {
+		t.Fatalf("suffix match = %d, want 16000", got)
+	}
+	if got := c.ContextWindowIn("mistral", "deepseek-chat"); got != 0 {
+		t.Fatalf("model absent from the provider reports %d, want 0 (no global fallback)", got)
+	}
+	if got := c.ContextWindowIn("azure-host", "nolimit"); got != 0 {
+		t.Fatalf("model without a limit reports %d, want 0", got)
+	}
+	if got := c.ContextWindowIn("nope", "deepseek-chat"); got != 0 {
+		t.Fatalf("unknown provider reports %d, want 0", got)
 	}
 }
