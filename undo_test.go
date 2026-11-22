@@ -368,8 +368,14 @@ func TestUndoRevertsWhatShellCommandsChanged(t *testing.T) {
 	}
 
 	s.beginTurn()
-	if out := run("printf changed > keep.txt && printf new > added.txt"); strings.Contains(out, "failed to start") || strings.Contains(out, "error") {
+	out := run("printf changed > keep.txt && printf new > added.txt")
+	if strings.Contains(out, "failed to start") || strings.Contains(out, "error") {
 		t.Skipf("no usable sandbox here: %s", out)
+	}
+	// A sandbox that silently refuses the writes would look like a journal that
+	// recorded nothing: say so instead of blaming the journal.
+	if _, err := os.Stat(filepath.Join(root, "added.txt")); err != nil {
+		t.Skipf("the sandbox did not let the command write its workspace: %s", out)
 	}
 	s.ChatHistory = append(s.ChatHistory, types.Message{Role: "user", Content: "run a command"})
 
@@ -414,5 +420,106 @@ func TestUndoAsksAboutAFileChangedAfterTheTurn(t *testing.T) {
 	}
 	if out := s.Sink.(*recordSink).text(); !strings.Contains(out, "1 file(s) restored") {
 		t.Fatalf("output = %q", out)
+	}
+}
+
+// A file whose name starts with ".." is a normal workspace file: the walk must
+// not mistake its relative path for an escape from the root.
+func TestJournalRecordsADotDotFileName(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	path := filepath.Join(root, "..notes.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.Collect(root, nil)
+
+	if got := s.journal.turnChangedFiles(1); got != 1 {
+		t.Fatalf("the journal recorded %d changes, want the ..notes.txt edit", got)
+	}
+	if _, err := s.rewindToTurn(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "before\n" {
+		t.Fatalf("file = %q, want the pre-turn content", data)
+	}
+}
+
+// A workspace reached through a symlink is still the workspace: macOS $TMPDIR is
+// /var/folders/… → /private/var/…, so comparing a resolved path against an
+// unresolved root refused every restore there and /undo silently left the files
+// alone.
+func TestUndoRestoresThroughASymlinkedWorkspace(t *testing.T) {
+	testWorkspace(t)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	s := &ChatSession{RestrictedRoot: link, ChatHistory: undoHistory(), SessionID: "20250101-000000-abcdef0123456789"}
+	s.journal = newUndoJournal(link, s.SessionID, undoJournalDir(getChatHistoryDir(), s.SessionID))
+
+	path := filepath.Join(link, "a.txt")
+	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.BeginTurn(1)
+	s.journal.Sync(link, nil)
+	if err := os.WriteFile(path, []byte("model\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.Collect(link, nil)
+
+	out, err := s.rewindToTurn(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "original\n" {
+		t.Fatalf("file = %q, want the pre-turn content", data)
+	}
+	if len(out.Files.Restored) != 1 || len(out.Files.Failed) != 0 {
+		t.Fatalf("files = %+v", out.Files)
+	}
+}
+
+func TestInsideRootFollowsSymlinks(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	outside := t.TempDir()
+	escape := filepath.Join(real, "escape")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		root string
+		abs  string
+		want bool
+	}{
+		{"symlinked root", link, filepath.Join(link, "a.txt"), true},
+		{"resolved root", real, filepath.Join(real, "a.txt"), true},
+		{"a file in a subdirectory", link, filepath.Join(link, "sub", "a.txt"), true},
+		{"file not created yet", link, filepath.Join(link, "new", "a.txt"), true},
+		{"a sibling directory", link, filepath.Join(outside, "a.txt"), false},
+		{"a parent traversal", link, filepath.Join(link, "..", "elsewhere.txt"), false},
+		{"a link out of the tree", link, filepath.Join(link, "escape", "a.txt"), false},
+		{"a name starting with dots", link, filepath.Join(link, "..notes.txt"), true},
+	}
+	for _, tc := range cases {
+		if got := insideRoot(tc.root, tc.abs); got != tc.want {
+			t.Errorf("%s: insideRoot(%q, %q) = %v, want %v", tc.name, tc.root, tc.abs, got, tc.want)
+		}
 	}
 }

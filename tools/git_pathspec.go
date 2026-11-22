@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"fuckyourcli/store"
 )
 
 // ── git pathspec / ref validation ────────────────────────────────────────────
@@ -49,21 +51,20 @@ func validateGitPath(p, workspaceRoot string) (string, error) {
 	}
 
 	if filepath.IsAbs(clean) {
-		absRoot, err := filepath.Abs(workspaceRoot)
+		absRoot, err := store.ResolvePath(workspaceRoot)
 		if err != nil {
 			return "", fmt.Errorf("cannot resolve the workspace root: %w", err)
 		}
-		if clean != absRoot && !strings.HasPrefix(clean, absRoot+string(filepath.Separator)) {
-			return "", fmt.Errorf("access denied: %s is outside the workspace %s", raw, absRoot)
-		}
-		rel, err := filepath.Rel(absRoot, clean)
+		// Same rule as validatePathInRoot: containment is decided on the resolved
+		// path, the returned name keeps the link's own final component.
+		rel, err := relPathInRoot(clean, absRoot)
 		if err != nil {
-			return "", fmt.Errorf("cannot compute the relative path: %w", err)
+			return "", fmt.Errorf("access denied: %w", err)
 		}
 		clean = rel
 	}
 
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if escapesRoot(clean) {
 		return "", fmt.Errorf("access denied: path traversal is not allowed (%s)", raw)
 	}
 

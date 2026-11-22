@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"fuckyourcli/store"
 )
 
 // MaybeRunAsSandboxChild is a no-op on Darwin: we use external sandbox-exec,
@@ -48,6 +50,24 @@ func buildDarwinSandboxCmd(ctx context.Context, cfg sandboxConfig) (sandboxResul
 	cmd.Dir = cfg.RestrictedRoot
 
 	return sandboxResult{Cmd: cmd, Cleanup: cleanup}, nil
+}
+
+// sbPath resolves p for the profile: sandbox-exec matches the canonical path of
+// a vnode, so a rule spelled through a symlink never fires. macOS $TMPDIR lives
+// under /var → /private/var (and /tmp the same way), which is exactly where a
+// test workspace and any run from a shell in a temp dir end up: with the
+// unresolved spelling the command could not write its own workspace at all.
+func sbPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	resolved, err := store.ResolvePath(p)
+	if err != nil {
+		// A path that does not resolve cannot be granted either: keep the caller's
+		// spelling and let the rule be as narrow as it was.
+		return p
+	}
+	return resolved
 }
 
 // buildSBProfile generates the sandbox-exec profile in TinyScheme format.
@@ -92,12 +112,12 @@ func buildSBProfile(cfg sandboxConfig) string {
 		"/AppleInternal",
 	}
 	for _, p := range systemRO {
-		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", p))
+		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", sbPath(p)))
 	}
 	// Append RO paths from config (may overlap)
 	for _, p := range cfg.AllowedRO {
 		if p != "" {
-			sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", p))
+			sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", sbPath(p)))
 		}
 	}
 	sb.WriteString("\n")
@@ -106,7 +126,7 @@ func buildSBProfile(cfg sandboxConfig) string {
 	sb.WriteString("; read-write paths\n")
 	for _, p := range cfg.AllowedRW {
 		if p != "" {
-			sb.WriteString(fmt.Sprintf("(allow file-read* file-write* (subpath %q))\n", p))
+			sb.WriteString(fmt.Sprintf("(allow file-read* file-write* (subpath %q))\n", sbPath(p)))
 		}
 	}
 	sb.WriteString("\n")
@@ -117,11 +137,11 @@ func buildSBProfile(cfg sandboxConfig) string {
 	sb.WriteString("; sensitive paths — explicit deny (redundant but explicit)\n")
 	home, _ := os.UserHomeDir()
 	for _, p := range sensitivePaths(home) {
-		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", p))
+		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", sbPath(p)))
 	}
 	sb.WriteString("\n")
 	for _, p := range workspaceSensitivePaths(cfg.RestrictedRoot) {
-		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", p))
+		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", sbPath(p)))
 	}
 	sb.WriteString("\n")
 

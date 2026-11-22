@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"fuckyourcli/store"
 )
 
 // getRoot opens an os.Root for the restricted root directory (traversal-safe).
@@ -22,23 +24,20 @@ func validatePathInRoot(requestedPath string, restrictedRoot string, globalIgnor
 
 	cleanPath := filepath.Clean(requestedPath)
 
-	if strings.HasPrefix(cleanPath, "..") {
+	// Absolute paths are checked against the root below, after both sides are
+	// resolved; here only a relative path that climbs out is refused.
+	if !filepath.IsAbs(cleanPath) && escapesRoot(cleanPath) {
 		return "", fmt.Errorf("access denied: path traversal not allowed")
 	}
 
 	if filepath.IsAbs(requestedPath) {
-		rootAbs, err := filepath.Abs(restrictedRoot)
+		rootAbs, err := store.ResolvePath(restrictedRoot)
 		if err != nil {
 			return "", fmt.Errorf("cannot resolve restricted root: %w", err)
 		}
-
-		if !strings.HasPrefix(requestedPath, rootAbs+string(filepath.Separator)) && requestedPath != rootAbs {
-			return "", fmt.Errorf("access denied: %s is outside allowed directory %s", requestedPath, rootAbs)
-		}
-
-		relPath, err = filepath.Rel(rootAbs, requestedPath)
+		relPath, err = relPathInRoot(requestedPath, rootAbs)
 		if err != nil {
-			return "", fmt.Errorf("cannot compute relative path: %w", err)
+			return "", fmt.Errorf("access denied: %v", err)
 		}
 		cleanPath = relPath
 	}
@@ -51,6 +50,63 @@ func validatePathInRoot(requestedPath string, restrictedRoot string, globalIgnor
 	}
 
 	return cleanPath, nil
+}
+
+// escapesRoot reports whether a cleaned relative path leaves its base. A name
+// that merely starts with ".." (..notes.txt) is a normal file, not an escape.
+func escapesRoot(rel string) bool {
+	return filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// relPathInRoot turns an absolute path into the relative name a caller can act
+// on. Containment is decided on the fully resolved path — a link must not lead
+// out of the workspace — while the returned name keeps its final component as it
+// was spelled: delete and rename address the link, never its target. The
+// asymmetry with a relative path (a link pointing outside is refused here, but
+// deletable by name) is deliberate: the strict side is the one that can be
+// handed to a plain OS call.
+func relPathInRoot(requestedPath, rootAbs string) (string, error) {
+	p := filepath.Clean(requestedPath)
+	// landsOnRoot is what makes the root addressable through its own symlink; it is
+	// only a fallback, never a name: a link inside the workspace that points at the
+	// root ("self" → ".") must keep its own name, or deleting it would wipe the
+	// workspace instead of removing the link.
+	landsOnRoot := false
+	target, err := store.ResolvePath(p)
+	if err != nil {
+		// A link that resolves to nothing (dangling or looping) has no landing site
+		// to check, and it must stay addressable so it can be deleted or renamed.
+		if !isSymlink(p) {
+			return "", err
+		}
+	} else {
+		rel, rerr := filepath.Rel(rootAbs, target)
+		if rerr != nil || escapesRoot(rel) {
+			return "", fmt.Errorf("%s is outside the workspace %s", requestedPath, rootAbs)
+		}
+		landsOnRoot = rel == "."
+	}
+	parent, err := store.ResolvePath(filepath.Dir(p))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(rootAbs, filepath.Join(parent, filepath.Base(p)))
+	if err == nil && !escapesRoot(rel) {
+		return rel, nil
+	}
+	if landsOnRoot {
+		// The root spelled through its own link (~/code → /Volumes/ext/code): the
+		// name lives outside itself, but it is the root.
+		return ".", nil
+	}
+	return "", fmt.Errorf("%s is outside the workspace %s", requestedPath, rootAbs)
+}
+
+// isSymlink reports whether p itself is a symlink (Lstat, so it is never
+// followed).
+func isSymlink(p string) bool {
+	info, err := os.Lstat(p)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
 // realPathWithinRoot resolves every symlink component of absPath — which must
@@ -73,7 +129,9 @@ func realPathWithinRoot(absPath, restrictedRoot string) (string, error) {
 		return "", err
 	}
 
-	if real != realRoot && !strings.HasPrefix(real, realRoot+string(filepath.Separator)) {
+	// The root itself must stay reachable even when it is "/", where a prefix
+	// check would look for a doubled separator.
+	if rel, err := filepath.Rel(realRoot, real); err != nil || escapesRoot(rel) {
 		return "", fmt.Errorf("access denied: %s resolves outside allowed directory %s", absPath, realRoot)
 	}
 	return real, nil

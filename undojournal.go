@@ -261,8 +261,15 @@ func (j *undoJournal) record(turn int, change fileChange) {
 // ignored paths, the .git directory and files above the per-file limit are left
 // out (an ignored artifact is not a model edit worth reverting).
 func (j *undoJournal) walk(ig *tools.IgnoreManager, visit func(rel, abs string, info fs.FileInfo)) {
+	// WalkDir does not follow the root itself, so a workspace opened through a
+	// symlink would hand back nothing but the link: every turn would look like it
+	// changed no files at all.
+	root := j.root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	visited := 0
-	err := filepath.WalkDir(j.root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -270,7 +277,7 @@ func (j *undoJournal) walk(ig *tools.IgnoreManager, visit func(rel, abs string, 
 		if d.IsDir() {
 			// Only the repository metadata itself is out of scope: .github, .gitignore
 			// and the rest of the dot files are ordinary workspace content.
-			if path != j.root && name == ".git" {
+			if path != root && name == ".git" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -283,15 +290,15 @@ func (j *undoJournal) walk(ig *tools.IgnoreManager, visit func(rel, abs string, 
 			j.partial = true
 			return filepath.SkipAll
 		}
-		if ig != nil && ig.IsIgnored(path, j.root) {
+		if ig != nil && ig.IsIgnored(path, root) {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
 		}
-		rel, err := filepath.Rel(j.root, path)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || !relInside(rel) {
 			return nil
 		}
 		visit(filepath.ToSlash(rel), path, info)
@@ -431,18 +438,37 @@ func (j *undoJournal) restore(change fileChange) error {
 	return os.WriteFile(abs, data, mode)
 }
 
-// insideRoot reports whether abs stays inside root, symlinks included.
+// insideRoot reports whether abs stays inside root, symlinks included. Both
+// sides are resolved before they are compared: a workspace reached through a
+// symlink (macOS $TMPDIR lives under /var → /private/var, and /tmp the same way)
+// would otherwise look like another tree and every restore would be refused.
+// A path that does not exist yet is matched by its deepest existing ancestor, so
+// a restore can recreate it.
 func insideRoot(root, abs string) bool {
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if !withinTree(root, abs) {
 		return false
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	resolvedRoot, err := store.ResolvePath(root)
 	if err != nil {
 		return false
 	}
-	relParent, err := filepath.Rel(root, parent)
-	return err == nil && !strings.HasPrefix(relParent, "..")
+	resolvedAbs, err := store.ResolvePath(abs)
+	if err != nil {
+		return false
+	}
+	return withinTree(resolvedRoot, resolvedAbs)
+}
+
+// withinTree reports whether p is lexically inside root.
+func withinTree(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && relInside(rel)
+}
+
+// relInside reports whether a relative path stays below its base. A name that
+// merely starts with ".." (..notes.txt) is a normal file, not an escape.
+func relInside(rel string) bool {
+	return !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // matchesVersion reports whether the file on disk still is what the turn left.

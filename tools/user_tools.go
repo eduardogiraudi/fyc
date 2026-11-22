@@ -220,7 +220,7 @@ func executeReadSkillTool(args map[string]any, restrictedRoot string) string {
 
 	// Path traversal protection: clean the path and reject absolute or escaping paths.
 	relPath := filepath.Clean(fileArg)
-	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "..") {
+	if escapesRoot(relPath) {
 		return "error: path traversal detected"
 	}
 
