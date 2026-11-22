@@ -41,10 +41,10 @@ func TestPreparePromptFilesImage(t *testing.T) {
 	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 3))); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "foto.png"), b.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "photo.png"), b.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	msg, names, err := preparePromptFiles("look @foto.png", root, tools.LoadIgnoreFiles(root))
+	msg, names, err := preparePromptFiles("look @photo.png", root, tools.LoadIgnoreFiles(root))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ func TestScan(t *testing.T) {
 		text string
 		want []string
 	}{
-		{"inspect @test.py and @foto.png", []string{"test.py", "foto.png"}},
+		{"inspect @test.py and @photo.png", []string{"test.py", "photo.png"}},
 		{"α\n@\"my dir/test.py\"", []string{"my dir/test.py"}},
 		{"a@b.com https://a/@test.py \\@literal.py `@code.py`", nil},
 		{"```python\n@test.py\n```\n@real.py", []string{"real.py"}},

@@ -137,7 +137,7 @@ See the [full command list](docs/DOCS.md#usage) for the rest.
 
 ### Attach files in chat
 
-Use `@test.py` to include a UTF-8 text file or `@foto.png` to attach an image (PNG, JPEG or GIF; requires an image-capable model). Quote paths containing spaces: `@"my dir/test.py"`.
+Use `@test.py` to include a UTF-8 text file or `@photo.png` to attach an image (PNG, JPEG or GIF; requires an image-capable model). Quote paths containing spaces: `@"my dir/test.py"`.
 
 Type `@` to browse workspace paths: ↑/↓ selects, Tab or Enter inserts, Esc dismisses. Suggestions browse one directory at a time (up to 200 matches among its first 4096 entries). The prompt remains editable, including on multiple lines. Email addresses, URLs, code blocks and escaped `\@mentions` remain literal.
 
