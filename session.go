@@ -102,6 +102,7 @@ func (s *ChatSession) saveHistoryEntry(entry string) {
 // ProcessInput handles one line of user input.
 // It returns false when the user wants to exit.
 func (s *ChatSession) ProcessInput(input string) bool {
+	s.turnStarted = false
 	if input == "exit" || input == "/exit" {
 		return false
 	}
@@ -177,6 +178,9 @@ func (s *ChatSession) ProcessInput(input string) bool {
 		}
 	}
 
+	// The turn's state is frozen before its prompt joins the history: the anchor
+	// cache and the workspace as they are now are what /undo puts back.
+	s.beginTurn()
 	s.ChatHistory = append(s.ChatHistory, prompt)
 
 	streamChat(s)
@@ -192,6 +196,7 @@ func (s *ChatSession) ProcessInput(input string) bool {
 }
 
 func (s *ChatSession) autosave() {
+	s.saveUndoJournal()
 	if err := saveChatSession(s); err != nil && s.Sink != nil {
 		s.Sink.WriteText(ui.InfoStyle.Render("Warning: could not save chat: " + err.Error()))
 		s.Sink.WriteNewline()

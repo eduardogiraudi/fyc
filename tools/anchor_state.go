@@ -279,6 +279,10 @@ type FileState struct {
 	// unseen holds anchors created by an external change that the model has not
 	// been shown yet; a patch range must not silently swallow them.
 	unseen map[string]bool
+	// epoch is the snapshot generation this entry belongs to: an entry whose
+	// epoch is older than the manager's is shared with an AnchorSnapshot and is
+	// copied before being mutated (see cowLocked).
+	epoch uint64
 }
 
 func newFileState(lines []string) *FileState {
@@ -308,6 +312,9 @@ type AnchorStateManager struct {
 	mu     sync.Mutex
 	files  map[string]*FileState
 	issued uint64 // number of ids handed out so far; never rewound
+	// epoch is the snapshot generation: an entry whose epoch is older than this
+	// is shared with an AnchorSnapshot and is copied before being mutated.
+	epoch uint64
 }
 
 // globalAnchorState is the session-scoped singleton.
@@ -324,6 +331,7 @@ func (m *AnchorStateManager) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.files = make(map[string]*FileState)
+	m.epoch++
 	// Do not rewind the id counter: an in-flight patch must not regain validity after a re-read.
 }
 
@@ -332,7 +340,9 @@ func (m *AnchorStateManager) EnsureContent(absPath, content string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ensureAnchors(absPath, SplitLines(content))
-	m.files[absPath].content = content
+	if fs := m.cowLocked(absPath); fs != nil {
+		fs.content = content
+	}
 }
 
 // syncWithDisk brings the cached file up to date with the exact bytes now on
@@ -357,6 +367,9 @@ func (m *AnchorStateManager) syncWithDisk(absPath, content string) error {
 	if slicesEqual(fs.lines, lines) {
 		delete(m.files, absPath)
 		return fmt.Errorf("file changed on disk since the last anchored read/edit (final newline) — no changes written; call get_anchors again and reconsider the patch using the current content")
+	}
+	if fs = m.cowLocked(absPath); fs == nil {
+		return fmt.Errorf("file not loaded — call get_anchors first")
 	}
 	m.reconcile(fs, lines)
 	fs.content = content
@@ -387,6 +400,7 @@ func (m *AnchorStateManager) ensureAnchors(absPath string, lines []string) {
 	fs := m.files[absPath]
 	if fs == nil {
 		fs = newFileState(lines)
+		fs.epoch = m.epoch
 		for i := range lines {
 			a := m.nextAnchor()
 			fs.lineToAnchor[i] = a
@@ -396,6 +410,9 @@ func (m *AnchorStateManager) ensureAnchors(absPath string, lines []string) {
 		return
 	}
 	if slicesEqual(fs.lines, lines) {
+		return
+	}
+	if fs = m.cowLocked(absPath); fs == nil {
 		return
 	}
 	m.reconcile(fs, lines)
@@ -499,7 +516,7 @@ func (m *AnchorStateManager) reconcile(fs *FileState, lines []string) {
 func (m *AnchorStateManager) MarkSeen(absPath, output string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fs := m.files[absPath]
+	fs := m.cowLocked(absPath)
 	if fs == nil {
 		return
 	}
@@ -557,7 +574,7 @@ func (m *AnchorStateManager) PlanEdit(absPath, startAnchor, endAnchor, replaceme
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	fs := m.files[absPath]
+	fs := m.cowLocked(absPath)
 	if fs == nil {
 		return nil, nil, editRange{}, fmt.Errorf("file not loaded — call get_anchors first")
 	}
@@ -797,10 +814,11 @@ func (m *AnchorStateManager) CommitEdit(absPath string, r editRange, oldLines, n
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	fs := m.files[absPath]
+	fs := m.cowLocked(absPath)
 	if fs == nil {
 		// Shouldn't happen if PreviewEdit succeeded, but be safe.
 		fs = newFileState(newLines)
+		fs.epoch = m.epoch
 		for i := range newLines {
 			a := m.nextAnchor()
 			fs.lineToAnchor[i] = a

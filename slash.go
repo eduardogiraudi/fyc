@@ -162,6 +162,12 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		return true, ""
 	}
 
+	// Handle /undo command
+	if input == "/undo" || strings.HasPrefix(input, "/undo ") {
+		handleUndoCommand(s, input)
+		return true, ""
+	}
+
 	// Handle /clear command
 	if input == "/clear" || strings.HasPrefix(input, "/clear ") {
 		var filtered []types.Message
@@ -172,6 +178,14 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		}
 		s.ChatHistory = filtered
 		s.retryRequest = nil
+		// The turns the journal described are gone with the conversation: drop the
+		// per-turn state (and the journal of this session) instead of leaving
+		// records that can never be rewound to.
+		if s.journal != nil {
+			s.journal.Discard()
+		}
+		s.realignTurnState(0)
+		s.resetTurnSnapshots()
 		tools.ResetAnchorState()
 		// The cleared context no longer carries the persistent mode's
 		// instructions, and /clear returns to plain chat: drop both so the mode

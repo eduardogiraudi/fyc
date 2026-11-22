@@ -129,6 +129,7 @@ Handy commands inside the chat:
 | `/sessions` | Manage saved sessions (switch, new, rename, delete) via an interactive menu. |
 | `/plan`, `/debug`, `/deep` | One-shot planning, debugging and deep-research modes. |
 | `/tutorial <question>` | Answer a question about using fyc from its embedded documentation and no agent tools; use `/mode tutorial` for follow-ups. |
+| `/undo` | Rewind to before a turn: conversation, transcript, files and anchors go back together (see [docs](docs/DOCS.md#rewinding-a-turn)). |
 | `/compact` | Summarize the conversation to free up context. |
 | `/usage` | Show token usage for all time, this month and this session (tokens only, no cost). |
 | `/retry` | Repeat the failed provider request without rerunning completed tools. |

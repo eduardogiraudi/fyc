@@ -11,7 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type generationDoneMsg struct{}
+// generationDoneMsg ends a turn. startedTurn tells whether the submitted input
+// actually opened one (a slash command prints but produces no turn): only a real
+// turn closes a transcript boundary.
+type generationDoneMsg struct{ startedTurn bool }
 
 type chatModel struct {
 	session *ChatSession
@@ -142,6 +145,9 @@ func (m *chatModel) enableAltScreenBlocks(seed []ui.SeedBlock, header ...func(in
 		switch {
 		case i == 0 && len(header) > 0:
 			m.transcript.AppendRendered(header[0], m.width)
+			m.transcript.preamble = len(m.transcript.blocks)
+		case block.Turn:
+			m.transcript.CloseTurn()
 		case block.Tool != nil:
 			m.transcript.AppendTool(block.Tool)
 		default:
@@ -384,8 +390,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.printCmd(ui.RenderSubmittedPrompt(input)))
 		cmds = append(cmds, m.printCmd(ui.SeparatorStyle.Render(strings.Repeat("─", max(20, m.width-1)))))
 		cmds = append(cmds, func() tea.Msg {
-			m.session.ProcessInput(input)
-			return generationDoneMsg{}
+			session := m.session
+			session.ProcessInput(input)
+			return generationDoneMsg{startedTurn: session.turnStarted}
 		})
 
 	case ui.InputCancelMsg:
@@ -400,6 +407,11 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.finishReasoningCmd())
 		m.clearTransient()
 		m.statsProviderInfo = currentProviderLine()
+		// The boundary comes after the flush: the tail of the turn belongs to the
+		// turn, and /undo has to retract it with the rest.
+		if m.transcript != nil && msg.startedTurn {
+			m.transcript.CloseTurn()
+		}
 		// Not every provider reports prompt tokens, and then no stats message
 		// arrives at all: the gauge still has to follow the history it grew.
 		m.refreshContextBar()
@@ -431,6 +443,36 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.StreamAttemptEndMsg:
 		m.streamAttempt = nil
 
+	case ui.StreamTurnCloseMsg:
+		// A replayed conversation (a session switch) closes its turns through the
+		// sink, exactly like the live path does.
+		if m.transcript != nil {
+			m.transcript.CloseTurn()
+		}
+
+	case ui.StreamTurnAlignMsg:
+		// Compaction summarized turns away: their boundaries must go with them, or
+		// the next undo would cut at a position that no longer exists.
+		if m.transcript != nil {
+			m.transcript.AlignTurns(msg.Turns)
+		}
+
+	case ui.StreamTurnRewindMsg:
+		// /undo asks the frame to retract the rows of the turns it is discarding.
+		// The reply is synchronous: the command is blocked on it, and only this
+		// frame knows what it drew.
+		if m.transcript == nil {
+			msg.Reply <- -1
+			break
+		}
+		m.textBuf = ""
+		m.clearTransient()
+		m.finishReasoningCmd()
+		m.reasoning = ui.NewReasoningView(m.width, reasoningHeight(m.height))
+		m.copyNotice = ""
+		m.hover = hoverNone
+		msg.Reply <- m.transcript.RewindTurns(msg.Turn)
+		m.refreshContextBar()
 	case ui.StreamResetMsg:
 		cmds = append(cmds, m.flushTextCmd())
 		cmds = append(cmds, m.finishReasoningCmd())
@@ -1084,6 +1126,7 @@ func isChatStreamMsg(msg tea.Msg) bool {
 		ui.StreamHookLineMsg, ui.StreamFinalizeMsg, ui.StreamPauseMsg,
 		ui.StreamPrintMsg, ui.StreamResumeMsg, ui.StreamSubagentPanelMsg,
 		ui.StreamAttemptBeginMsg, ui.StreamAttemptRollbackMsg, ui.StreamAttemptEndMsg,
+		ui.StreamTurnCloseMsg, ui.StreamTurnAlignMsg, ui.StreamTurnRewindMsg,
 		generationDoneMsg:
 		return true
 	}

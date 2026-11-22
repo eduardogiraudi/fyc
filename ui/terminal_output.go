@@ -16,6 +16,9 @@ import (
 type SeedBlock struct {
 	Text string
 	Tool *ToolOutput
+	// Turn marks a turn boundary: the block itself prints nothing, it only tells
+	// the seeded transcript where a turn ended (see TurnSink).
+	Turn bool
 }
 
 // preProgramBlock divertes rendered blocks printed before the chat program
@@ -55,6 +58,34 @@ func PrintToolBlock(tool *ToolOutput) {
 		return
 	}
 	printPreProgramBlock(SeedBlock{Tool: tool}, true)
+}
+
+// PrintTurnBoundary records a turn boundary for a transcript that does not exist
+// yet (session replay on start-up): the block carries no text and prints nothing
+// on stdout, where turn history has no meaning.
+func PrintTurnBoundary() {
+	preProgramBlock.mu.Lock()
+	fn := preProgramBlock.fn
+	preProgramBlock.mu.Unlock()
+	if fn != nil {
+		fn(SeedBlock{Turn: true})
+	}
+}
+
+// TurnSink is implemented by the sink of the running alt-screen chat: it keeps
+// the transcript's turn boundaries aligned with the conversation, so a rewound
+// turn can retract exactly the rows it produced.
+type TurnSink interface {
+	// CloseTurn records where the turn that just finished ended.
+	CloseTurn()
+	// AlignTurns drops the boundaries of turns that no longer exist (compaction,
+	// /clear, a different session).
+	AlignTurns(turns int)
+	// RewindTurns retracts the transcript back to the start of a 0-based turn,
+	// reporting how many rows disappeared. ok is false when the running frame
+	// keeps no transcript of its own (the inline REPL, the AG-UI server) or does
+	// not answer in time.
+	RewindTurns(ctx context.Context, turn int) (rows int, ok bool)
 }
 
 func printPreProgramBlock(block SeedBlock, clamp bool) {
@@ -249,6 +280,37 @@ func (s *TerminalOutputSink) PrintBlock(text string) {
 		return
 	}
 	PrintRenderedBlock(text)
+}
+
+// CloseTurn implements TurnSink: the boundary of the finished turn stays in the
+// seed when the program is not attached yet, exactly like the blocks around it.
+func (s *TerminalOutputSink) CloseTurn() {
+	if s.send(StreamTurnCloseMsg{}) {
+		return
+	}
+	PrintTurnBoundary()
+}
+
+// AlignTurns implements TurnSink. It only means something inside a running
+// transcript, so without a program there is nothing to do.
+func (s *TerminalOutputSink) AlignTurns(turns int) {
+	s.send(StreamTurnAlignMsg{Turns: turns})
+}
+
+// RewindTurns implements TurnSink. The answer comes from the running frame, so
+// a session without a transcript of its own (inline REPL, AG-UI) reports ok
+// false instead of pretending the rows are gone.
+func (s *TerminalOutputSink) RewindTurns(ctx context.Context, turn int) (int, bool) {
+	reply := make(chan int, 1)
+	if ctx.Err() != nil || !s.send(StreamTurnRewindMsg{Turn: turn, Reply: reply}) {
+		return 0, false
+	}
+	select {
+	case rows := <-reply:
+		return rows, rows >= 0
+	case <-ctx.Done():
+		return 0, false
+	}
 }
 
 func (s *TerminalOutputSink) BeginStreamAttempt(ctx context.Context) bool {

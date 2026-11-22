@@ -56,6 +56,10 @@ func switchChatSession(s *ChatSession, id string) error {
 	}
 	s.ChatHistory = msgs
 	s.retryRequest = nil
+	// The turn records of the previous conversation (anchors, workspace, turn
+	// boundaries) describe turns this session does not have.
+	s.resetTurnSnapshots()
+	s.realignTurnState(0)
 	// The loaded conversation starts as plain chat: drop the runtime mode and
 	// its injection flag so nothing dangles.
 	s.persistentModeInjected = ""
@@ -84,6 +88,8 @@ func startNewChat(s *ChatSession) error {
 	}
 	s.ChatHistory = filtered
 	s.retryRequest = nil
+	s.resetTurnSnapshots()
+	s.realignTurnState(0)
 	// A new chat starts as plain chat: drop the runtime mode and its injection
 	// flag so nothing dangles.
 	s.persistentModeInjected = ""
@@ -372,7 +378,19 @@ func replaySessionHistory(s *ChatSession) {
 		pending = pending[:0]
 	}
 
-	for _, m := range s.ChatHistory {
+	// The conversation being replayed replaces whatever the transcript was
+	// showing: its turn boundaries are the only ones left, and they are rebuilt
+	// from the history as the blocks go by (see chatTurns).
+	alignTurns(s, 0)
+	turns := chatTurns(s.ChatHistory)
+	turnStarts := map[int]bool{}
+	for i, t := range turns {
+		if i > 0 && t.PromptIndex >= 0 {
+			turnStarts[t.PromptIndex] = true
+		}
+	}
+
+	for i, m := range s.ChatHistory {
 		switch m.Role {
 		case "user":
 			flushPending()
@@ -381,6 +399,9 @@ func replaySessionHistory(s *ChatSession) {
 				continue
 			}
 			if prompt := replayablePrompt(m.Content); prompt != "" {
+				if turnStarts[i] {
+					closeTurn(s)
+				}
 				writeSessionBlock(s, ui.RenderSubmittedPrompt(prompt))
 			}
 		case "assistant":
@@ -395,6 +416,9 @@ func replaySessionHistory(s *ChatSession) {
 		}
 	}
 	flushPending()
+	if len(turns) > 0 {
+		closeTurn(s)
+	}
 }
 
 // toolBlockPrinter is implemented by sinks that keep a tool result expandable

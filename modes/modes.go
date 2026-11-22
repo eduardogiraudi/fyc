@@ -84,6 +84,7 @@ func GetCommands(webSearchEnabled ...bool) []Command {
 		{Name: "/help", Description: "Show available commands"},
 		{Name: "/auto", Description: "Enable autonomous execution"},
 		{Name: "/airplane", Description: "Toggle web_search and web-dependent commands"},
+		{Name: "/undo", Description: "Rewind to before a turn: conversation, transcript, files and anchors"},
 		{Name: "/clear", Description: "Clear chat context (keeps system messages)"},
 		{Name: "/compact", Description: "Compact chat context into a structured summary"},
 		{Name: "/usage", Description: "Show token usage: all time, this month and this session"},

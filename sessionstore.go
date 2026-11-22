@@ -155,7 +155,7 @@ func sha256Hex(b []byte) string {
 // sessionTitle derives a one-line title from the first user message.
 func sessionTitle(history []types.Message) string {
 	for _, m := range history {
-		if m.Role != "user" {
+		if m.Role != "user" || isModeInstruction(m) || strings.HasPrefix(m.Content, compactionSummaryPrefix) {
 			continue
 		}
 		text := strings.Join(strings.Fields(m.Content), " ")
@@ -354,6 +354,7 @@ func pruneSessions(workspaceDir string, idx *sessionIndex, max int) {
 	}
 	for _, m := range idx.Sessions[max:] {
 		_ = os.Remove(sessionPath(workspaceDir, m.ID))
+		pruneUndoJournal(workspaceDir, m.ID)
 		if err := logger.RemoveSession(m.ID); err != nil {
 			store.Notice("logs: could not prune session: %v", err)
 		}
@@ -499,6 +500,8 @@ func deleteSession(workspaceDir, id string) error {
 	if err := os.Remove(sessionPath(workspaceDir, id)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	// The undo journal of a session that no longer exists cannot be rewound to.
+	pruneUndoJournal(workspaceDir, id)
 	idx, err := loadSessionIndex(workspaceDir)
 	if err != nil {
 		return err

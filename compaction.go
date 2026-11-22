@@ -474,6 +474,10 @@ func compactContextWith(ctx context.Context, s *ChatSession, retainTurn bool, th
 		return before, before, res, err
 	}
 	s.ChatHistory = history
+	// The older turns are now one summary: the transcript boundaries, the anchor
+	// snapshots and the file journal must forget them too, or /undo would rewind to
+	// a turn index that no longer means the same thing.
+	s.realignTurnState(len(chatTurns(history)))
 	// The measurement describes the history that just disappeared.
 	s.lastProviderTokens, s.lastProviderMessages = 0, 0
 	s.persistentModeInjected = ""

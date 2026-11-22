@@ -7,7 +7,7 @@ The Go module and default binary name are both `fuckyourcli`; application-owned 
 ## Contents
 
 - Setup: [Requirements](#requirements) · [Build](#build) · [Install](#install) · [Configuration](#configuration) · [OpenAI Codex (OAuth)](#openai-codex-oauth)
-- Using it: [Usage](#usage) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
+- Using it: [Usage](#usage) · [Rewinding a turn](#rewinding-a-turn) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
 - Customisation: [Tool hooks](#tool-hooks-prepost) · [Status bar hook](#status-bar-hook) · [System prompt](#system-prompt-persona) · [Project instructions (AGENTS.md)](#project-instructions-agentsmd)
 - Tools & integrations: [Built-in tools](#built-in-tools) · [LSP servers](#lsp-servers) · [Git tools](#git-tools) · [MCP servers](#mcp-servers) · [AG-UI backend](#ag-ui-backend)
 - Internals: [Runtime files](#runtime-files) · [Architecture](#architecture) · [Security model](#security-model) ([Windows sandbox](#windows-sandbox)) · [Development](#development)
@@ -329,6 +329,7 @@ Inside the chat:
 | Mouse wheel, `PgUp` / `PgDn`, `Shift+↑` / `Shift+↓`, `Ctrl+Home`, `Ctrl+End` | Scroll the transcript in the alt-screen TUI (the default); `Ctrl+End` returns to the live output. Outside input popups, the wheel scrolls the transcript instead of the input history. No effect in the inline REPL (`alt_screen: false`), where the terminal scrolls. |
 | Left-drag, release | Select transcript rows — or the typed text, when the drag starts on the input bar — in alt-screen mode and copy them to the clipboard on release (`Shift`+drag selects with the terminal instead). |
 | `/airplane [on\|off]` | Toggle `web_search` and web-dependent commands. Equivalent to disabling/enabling `web_search` in tool settings. |
+| `/undo [n]` | Rewind to before a turn: discard that turn and every later one, and put the conversation, the transcript, the files it changed and the anchor cache back to that boundary. See [Rewinding a turn](#rewinding-a-turn). |
 | `/clear` | Clear chat context while keeping system messages. |
 | `/retry` | Repeat the last failed provider request without rerunning completed tools. |
 | `/delay <seconds>` | Persistently set delay before model requests. |
@@ -385,6 +386,39 @@ A manual retry regenerates that provider response from scratch. Partial text fro
 Manual retry is available for any provider error, including endpoints that report rate limiting as HTTP 400. It uses the currently selected provider/model and settings, so you can adjust `/model`, `/provider` or `/reasoning` first. The failed turn's mode instructions and tool restrictions are retained, including when switching away from Gemini. Tool calls and results keep stable matching IDs even when Gemini did not supply them. The first retry request skips auto-compaction to preserve its sampling boundary; later tool batches follow the usual compaction policy. If a later batch triggers compaction, mode instructions remain present exactly once and persistent modes keep their injection state, so the next prompt does not add the same instructions again.
 
 The checkpoint is runtime-only: restarting fyc, clearing or switching chats, sending a new prompt, or rewriting the conversation (for example with `/compact`) makes it unavailable. A successful response or user cancellation is not retryable. If the retry fails again, `/retry` remains available.
+
+## Rewinding a turn
+
+`/undo` returns the whole session — not just the messages — to the moment before a
+turn's prompt was sent. The menu lists the turns newest first (the last exchange
+is one key away); `/undo 3` picks a turn directly. A turn is discarded together
+with every later one, and everything the discarded turns produced is rolled back:
+
+- **Conversation**: the messages, the injected mode instructions of the discarded
+  turns and the retry checkpoint go away; rewinding before the first prompt leaves
+  an empty conversation in the same session.
+- **Transcript** (alt-screen TUI only): the rows of the discarded turns are
+  retracted. The inline REPL has no scrollback to retract, so it keeps them on
+  screen and says so.
+- **Files**: fyc keeps a journal of the workspace, refreshed at every turn
+  boundary and after every tool that can write (`write`, `replace_anchors`,
+  `delete`, `rename`, `move`, `copy`, `make_dir`, the mutating git tools and `sh`
+  — a shell command is as much a model change as a patch). Rewinding restores the
+  pre-turn bytes, recreates deleted files and removes the ones the turns created.
+- **Anchors**: the anchor cache is restored to the boundary, invalidations
+  included, so the model can keep patching without re-reading a file.
+
+Files changed *by you* after a turn are never overwritten silently: fyc compares
+the content, asks once whether to restore them or keep your version, and drops the
+anchor cache of every file it keeps. The journal itself is stored with the
+session, so a resumed chat can still revert its files; the anchor cache is
+runtime-only, and after a restart the model simply re-reads what it needs.
+
+Limits keep a snapshot from copying a large tree: files above 8 MiB, more than
+2,000 files or 64 MiB of new content in one turn are not captured, and the recap
+lists them instead of pretending they were reverted. Ignored files, `~/.` paths
+and anything outside the workspace are out of scope, as are the changes a
+detached `sh` process (`persistence: true`) makes after the call returned.
 
 ## Reasoning / thinking
 
@@ -664,6 +698,8 @@ Configured MCP servers can be enabled/disabled from the config UI. MCP resource 
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/index.json` | Per-workspace session index: one entry per chat (id, title, timestamps, message count). |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/sessions/<id>.json` | One versioned file per chat session; the most recent 50 are kept. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/blobs/<sha256>` | Content-addressed image payloads referenced by messages (garbage-collected when unreferenced). |
+| `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/undo/<id>/journal.json` | The undo journal of a session: what each turn changed on disk, so `/undo` can put the files back (removed with the session). |
+| `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/undo/<id>/blobs/<sha256>` | Content-addressed pre-images referenced by the undo journal. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/chat.json` | Legacy single-file chat history: migrated into `sessions/` on first read, then renamed `chat.json.migrated`. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/logs/<session-id>/events.jsonl` | One diagnostic stream per conversation, shared by its main agent, sub-agents and compaction requests. Resuming appends to the same stream. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/usage.json` | Per-day token totals behind `/usage` (requests, input, output, cache read/write; never prompts, responses or cost). It lives outside the conversation logs so the all-time and monthly figures survive log pruning and deleted sessions; when missing or corrupt it is rebuilt from the logs still on disk. |

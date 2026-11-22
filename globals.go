@@ -116,6 +116,18 @@ type ChatSession struct {
 	SessionID        string
 	SessionCreatedAt time.Time
 	SessionTitle     string
+
+	// turnStarted reports whether the last ProcessInput opened a real turn (a
+	// prompt, not a slash command). The chat uses it to close the transcript's
+	// turn boundary only when there is a turn to close.
+	turnStarted bool
+	// anchorTurns holds the anchor cache as it was at the start of each turn:
+	// index i is the state /undo must restore to rewind to turn i. Runtime only —
+	// after a restart the cache is empty anyway, so there is nothing to restore.
+	anchorTurns []*tools.AnchorSnapshot
+	// journal records the workspace before and after every turn, so /undo can put
+	// the files back (nil when snapshots are unavailable).
+	journal *undoJournal
 }
 
 // runContext returns the context of the active turn or run. A turn in flight

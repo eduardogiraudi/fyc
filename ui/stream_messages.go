@@ -44,6 +44,26 @@ type StreamAttemptBeginMsg struct{ Reply chan bool }
 type StreamAttemptRollbackMsg struct{ Reply chan bool }
 type StreamAttemptEndMsg struct{}
 
+// Turn messages keep the transcript's turn boundaries aligned with the history,
+// so /undo can retract exactly the rows of the turns it discards. A boundary is
+// recorded when a turn ends (CloseTurn) and only becomes a real split once the
+// next turn starts on top of it, which is what keeps the count equal to the
+// history's.
+type StreamTurnCloseMsg struct{}
+
+// StreamTurnRewindMsg asks the frame to retract the transcript back to the start
+// of a 0-based turn. Reply receives the number of rows removed, or -1 when the
+// running frame keeps no transcript of its own (inline REPL, AG-UI server).
+type StreamTurnRewindMsg struct {
+	Turn  int
+	Reply chan int
+}
+
+// StreamTurnAlignMsg reports that the history now holds turns turns (compaction
+// summarized the older ones away): only the boundaries of the surviving turns
+// are kept.
+type StreamTurnAlignMsg struct{ Turns int }
+
 // StreamPauseMsg asks the chat model to flush all transient state and release
 // the terminal. Ready is closed by the model once ReleaseTerminal has been
 // called, so the sender can block on it to guarantee the stdin handoff is

@@ -68,6 +68,19 @@ type transcriptState struct {
 	// drawn after the last completed row and scrolls with it, but is not part
 	// of lines until it completes.
 	tail []string
+
+	// turnStarts holds the block index where each turn after the first begins:
+	// entry i is the boundary between turn i and turn i+1, so its length stays
+	// one less than the history's turn count (see CloseTurn).
+	turnStarts []int
+	// turnEnd is where the turn that finished ended; turnClosed tells a real
+	// position from the zero value of a fresh transcript. The end only becomes a
+	// real boundary when the next turn starts on top of it.
+	turnEnd    int
+	turnClosed bool
+	// preamble is how many leading blocks belong to no turn (the startup banner):
+	// rewinding to the first turn keeps them.
+	preamble int
 }
 
 // cellPos is a position in the transcript: which row, and which column of it.
@@ -162,6 +175,16 @@ func (t *transcriptState) trim() {
 		// A partially evicted block becomes static: never resurrect its head.
 		t.blocks[0] = transcriptBlock{rows: append([]string(nil), t.blocks[0].rows[drop:]...)}
 	}
+	// The boundaries are block indices: evicting the head shifts every one of
+	// them, and a boundary that sat in an evicted block collapses onto the first
+	// surviving row (rewinding to it then retracts what is still on screen).
+	for k := range t.turnStarts {
+		t.turnStarts[k] = max(0, t.turnStarts[k]-i)
+	}
+	if t.turnClosed {
+		t.turnEnd = max(0, t.turnEnd-i)
+	}
+	t.preamble = max(0, t.preamble-i)
 	t.resetHover()
 }
 
@@ -205,6 +228,7 @@ func (t *transcriptState) Clone() *transcriptState {
 	copy := *t
 	copy.lines = append([]string(nil), t.lines...)
 	copy.blocks = append([]transcriptBlock(nil), t.blocks...)
+	copy.turnStarts = append([]int(nil), t.turnStarts...)
 	return &copy
 }
 

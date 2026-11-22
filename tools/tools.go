@@ -57,6 +57,13 @@ func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgno
 
 	res := dispatchToolCall(ctx, call, globalIgnore, restrictedRoot, mcpManager)
 
+	// Record what the call changed before anything else runs: the undo journal
+	// diffs the workspace, which is what makes `sh` and the git tools revertible
+	// exactly like a patch.
+	if journal := currentTurnJournal(); journal != nil && toolMayWrite(call.Function.Name) {
+		journal.Collect(restrictedRoot, globalIgnore)
+	}
+
 	// Post-tool hook: side effects only; its output is deliberately discarded
 	// (not added to the model context, not written to the CLI output).
 	RunPostToolHook(hooks.PostTool, call, res, restrictedRoot)
