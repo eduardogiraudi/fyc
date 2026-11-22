@@ -594,6 +594,12 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		return true, modifiedInput
 	}
 
+	// Handle /init command: generation of the repository AGENTS.md. The task
+	// goes to the model (see init_cmd.go), never to the editor here, so the
+	// documented commands are the ones actually verified in this repository.
+	if input == "/init" || strings.HasPrefix(input, "/init ") {
+		return handleInitCommand(s, input)
+	}
 	// Handle /sessions command
 	if input == "/sessions" || strings.HasPrefix(input, "/sessions ") {
 		handleSessionsCommand(s, input)

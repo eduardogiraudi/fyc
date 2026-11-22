@@ -119,6 +119,10 @@ func (s *ChatSession) ProcessInput(input string) bool {
 	}
 
 	s.retryRequest = nil
+	// The instruction chain is re-read once per turn: a file written by /init or
+	// edited outside fyc is in effect now, and the retry fingerprint ignores
+	// system messages on purpose.
+	refreshProjectContext(s)
 	cfg := config.Get()
 	mode, content := modes.DetectMode(input)
 	activeMode := s.CurrentMode

@@ -345,6 +345,7 @@ Inside the chat:
 | `/provider` | Switch provider and model. |
 | `/mode [name]` | List modes or activate a persistent mode. Use `/mode chat` to return to normal chat. |
 | `/skills <name> <prompt>` | Inject a local skill into a one-off prompt. |
+| `/init [specification]` | Generate or refresh the repository `AGENTS.md` (the open [agents.md](https://agents.md) format). `/init` hands the model a constrained task: it explores the repository, documents only commands it verified in the manifests, CI workflows and task-runner configuration, and writes the file with the normal tools — creating it with `write`, or extending an existing one with `get_anchors`/`replace_anchors`. The optional argument is a specification: it decides the sections, the style and what to document or ignore. `/init help` shows the usage. See [Project instructions (AGENTS.md)](#project-instructions-agentsmd). |
 | `/sessions` | Manage saved chat sessions for this workspace through an interactive menu: switch, new chat, rename, and delete (multi-select with a confirmation step). |
 | `/plan ...` | One-shot planning mode. |
 | `/debug ...` | One-shot debugging mode. |
@@ -555,6 +556,9 @@ ${FYC_PREFERENCES}
 
 Enabled by default. It is not exposed in the config UI; the JSON fields are `agents_md_enabled`, `agents_md_max_bytes`, and `agents_md_fallback_filenames`.
 
+The chain is re-read once at the start of every turn and the system prompt is re-rendered only when the content actually changed, so a file written by `/init` — or edited outside fyc — is in effect from the next turn, without restarting the session. The change never invalidates a `/retry` checkpoint: the retry fingerprint deliberately ignores system messages.
+
+`/init` is the generator: it does not write the file itself, it hands the model a task that keeps the standard's rules (plain Markdown, no required fields, the closest file wins, living documentation) and the quality bar (only verified commands, high-signal non-obvious facts, no generic or task-scoped advice, well under the byte budget). The optional argument is a specification that overrides the default structure; an existing `AGENTS.md` is extended in place instead of being overwritten, and `AGENTS.override.md` is reported because it outranks the generated file.
 ## Modes
 
 `fuckyourcli` includes dedicated prompt modes in `modes/`:

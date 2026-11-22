@@ -420,6 +420,23 @@ func updateSystemPrompt(s *ChatSession) {
 	s.ChatHistory = append([]types.Message{{Role: "system", Content: sysPrompt}}, s.ChatHistory...)
 }
 
+// refreshProjectContext reloads the AGENTS.md chain and re-renders the system
+// prompt only when its content actually changed: /init, an edit made in another
+// editor and a hand-written instruction file all become active on the next turn
+// without waiting for a restart. It is silent by design — the caller is the
+// start of a turn, where a stray transcript block would not belong.
+func refreshProjectContext(s *ChatSession) {
+	if s == nil || s.RestrictedRoot == "" {
+		return
+	}
+	rendered, _ := tools.LoadProjectContext(s.RestrictedRoot)
+	if rendered == s.ProjectContext {
+		return
+	}
+	s.ProjectContext = rendered
+	updateSystemPrompt(s)
+}
+
 // newSession builds and bootstraps a ChatSession without the interactive TUI.
 // It mirrors the non-visual part of the startup sequence in main.go and is used
 // by the AG-UI server (`fuckyourcli serve`): system prompt, MCP servers, ignore

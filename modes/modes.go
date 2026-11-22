@@ -89,6 +89,7 @@ func GetCommands(webSearchEnabled ...bool) []Command {
 		{Name: "/compact", Description: "Compact chat context into a structured summary"},
 		{Name: "/usage", Description: "Show token usage: all time, this month and this session"},
 		{Name: "/retry", Description: "Repeat the failed provider request without rerunning completed tools"},
+		{Name: "/init", Description: "Generate or refresh AGENTS.md (/init [specification])"},
 		{Name: "/delay", Description: "Set delay between AI responses (e.g., /delay 1.5)"},
 		{Name: "/temp", Description: "Set temperature for AI responses (e.g., /temp 0.8)"},
 		{Name: "/reasoning", Description: "Manage thinking/reasoning for the active model (interactive)"},
