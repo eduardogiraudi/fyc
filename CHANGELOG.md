@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-11-23
+
+### Added
+
+- ui: show a context window gauge under the provider row (`b4cc298`).
+- config: add a configurable models_url for the provider model list (`b4cc298`).
+- undo: add /undo to rewind a whole turn (`9021384`).
+- slash: add /init to generate or refresh AGENTS.md (`23a3f06`).
+- cd: allow extra workspace roots, session-only or saved (`894aac5`).
+
+### Fixed
+
+- resolve symlinks when comparing workspace paths on macOS (`e0798d8`).
+
 ## [1.6.0] - 2026-11-20
 
 ### Added
