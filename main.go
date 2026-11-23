@@ -126,6 +126,14 @@ func main() {
 	}
 
 	cfg := config.Get()
+	// A remembered workspace whose roots cover this folder offers itself before
+	// the session starts (/cd stores those sets in config.json). The prompt is a
+	// nested one: the alternate screen is not up yet, and nothing of it reaches
+	// the transcript. Dismissing it (q/Esc/Ctrl+C) quits, exactly like the chat
+	// picker.
+	if startupWorkspaceOffer(session) {
+		return
+	}
 	// altScreen switches the chat between the full-screen TUI (default) and the
 	// inline REPL. In alt-screen mode nothing may be printed before the
 	// chat transcript instead (see emit).
@@ -143,6 +151,11 @@ func main() {
 	info := []string{
 		fmt.Sprintf("%s %s %s %s %s", ui.ValueStyle.Render("v"+session.Version), ui.KeyStyle.Render("• OS:"), ui.ValueStyle.Render(runtime.GOOS), ui.KeyStyle.Render("• sha:"), ui.ValueStyle.Render(session.Commit)),
 		fmt.Sprintf("%s %s", ui.KeyStyle.Render("cwd:"), ui.ValueStyle.Render(session.RestrictedRoot)),
+	}
+	// A session with extra roots has to show them: they are the difference
+	// between "the model cannot touch that" and "it can".
+	if roots := session.workspaceRoots(); len(roots) > 1 {
+		info = append(info, fmt.Sprintf("%s %s", ui.KeyStyle.Render("roots:"), ui.ValueStyle.Render(strings.Join(roots[1:], " · "))))
 	}
 	providerInfo := config.GetCurrentProviderInfo()
 	info = append(info, fmt.Sprintf("%s %s %s %s", ui.KeyStyle.Render("provider:"), ui.ValueStyle.Render(providerInfo), ui.KeyStyle.Render("• model:"), ui.ValueStyle.Render(cfg.Model)))
@@ -162,7 +175,7 @@ func main() {
 	}
 
 	var ctxSummary string
-	session.ProjectContext, ctxSummary = tools.LoadProjectContext(session.RestrictedRoot)
+	session.ProjectContext, ctxSummary = tools.LoadWorkspaceContext(session.workspaceRoots())
 	if ctxSummary != "" {
 		info = append(info, fmt.Sprintf("%s %s", ui.KeyStyle.Render("context:"), ui.ValueStyle.Render(ctxSummary)))
 	}
@@ -227,7 +240,7 @@ func main() {
 	var ignoreWg sync.WaitGroup
 	ignoreWg.Add(1)
 	go func() {
-		session.GlobalIgnore = tools.LoadIgnoreFiles(session.RestrictedRoot)
+		session.GlobalIgnore = tools.LoadWorkspaceIgnore(session.workspaceRoots())
 		close(ignoreDone)
 	}()
 	ui.AnimateSpinner("Indexing files to ignore...", ignoreDone, &ignoreWg, "")

@@ -38,7 +38,7 @@ var persistentProcesses = make(map[int]*persistentProcess)
 
 // ExecuteToolWithSpinner dispatches a tool call and returns the result, running
 // the configured pre/post tool hooks around the actual execution.
-func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgnore *IgnoreManager, restrictedRoot string, mcpManager *mcp.MCPManager) types.ToolResult {
+func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgnore *IgnoreManager, ws Workspace, mcpManager *mcp.MCPManager) types.ToolResult {
 	executeMu.Lock()
 	defer executeMu.Unlock()
 
@@ -47,7 +47,7 @@ func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgno
 	ctx = withExecuteMuRelease(ctx, &executeMu)
 
 	hooks := config.Get().Hooks
-	if out, blocked := RunPreToolHook(hooks.PreTool, call, restrictedRoot); blocked {
+	if out, blocked := RunPreToolHook(hooks.PreTool, call, ws.Primary); blocked {
 		msg := "error: blocked by pre-tool hook"
 		if strings.TrimSpace(out) != "" {
 			msg += ":\n" + out
@@ -55,28 +55,51 @@ func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgno
 		return textResult(msg)
 	}
 
-	res := dispatchToolCall(ctx, call, globalIgnore, restrictedRoot, mcpManager)
+	res := dispatchToolCall(ctx, call, globalIgnore, ws, mcpManager)
 
 	// Record what the call changed before anything else runs: the undo journal
 	// diffs the workspace, which is what makes `sh` and the git tools revertible
 	// exactly like a patch.
 	if journal := currentTurnJournal(); journal != nil && toolMayWrite(call.Function.Name) {
-		journal.Collect(restrictedRoot, globalIgnore)
+		journal.Collect(ws.Primary, globalIgnore)
 	}
 
 	// Post-tool hook: side effects only; its output is deliberately discarded
 	// (not added to the model context, not written to the CLI output).
-	RunPostToolHook(hooks.PostTool, call, res, restrictedRoot)
+	RunPostToolHook(hooks.PostTool, call, res, ws.Primary)
 	return res
 }
 
 // dispatchToolCall runs the actual tool implementation for a call.
-func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *IgnoreManager, restrictedRoot string, mcpManager *mcp.MCPManager) types.ToolResult {
+//
+// Tools that take a single path keep their single-root implementation: the path
+// is resolved against the workspace here and handed over as a name inside the
+// owning root, so an absolute path under any allowed root (/cd) works everywhere
+// without a second code path per tool. Tools that take two paths or no path at
+// all (copy/move, git, LSP listing, skills) get the whole workspace.
+func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *IgnoreManager, ws Workspace, mcpManager *mcp.MCPManager) types.ToolResult {
 	name := call.Function.Name
 	args := call.Function.Arguments
 
 	if handled, result := executeMCPPrefixCheck(ctx, name, args, mcpManager); handled {
 		return textResult(result)
+	}
+
+	// withPath resolves args[key] and runs a tool inside the owning root.
+	withPath := func(key string, run func(map[string]any, string) string) types.ToolResult {
+		bound, root, err := bindPath(args, key, ws, globalIgnore)
+		if err != nil {
+			return textResult(err.Error())
+		}
+		return textResult(run(bound, root))
+	}
+	// withPathResult is withPath for a tool that returns a structured result.
+	withPathResult := func(key string, run func(map[string]any, string) types.ToolResult) types.ToolResult {
+		bound, root, err := bindPath(args, key, ws, globalIgnore)
+		if err != nil {
+			return textResult(err.Error())
+		}
+		return run(bound, root)
 	}
 
 	switch name {
@@ -85,41 +108,61 @@ func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *Ig
 	case "sniff":
 		return textResult(executeSniffTool(args))
 	case "skills_discovery":
-		return textResult(executeSkillsDiscoveryTool(restrictedRoot))
+		return textResult(executeSkillsDiscoveryTool(ws))
 
 	case "read_skill":
-		return textResult(executeReadSkillTool(args, restrictedRoot))
+		return textResult(executeReadSkillTool(args, ws))
 
 	case "web_search":
 		return textResult(executeWebSearchTool(ctx, args))
 
 	case "ls":
-		return textResult(executeLSTool(args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeLSTool(a, root, globalIgnore)
+		})
 	case "grep":
-		return textResult(executeGrepTool(args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeGrepTool(a, root, globalIgnore)
+		})
 	case "read":
-		return textResult(executeReadTool(args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeReadTool(a, root, globalIgnore)
+		})
 	case "get_anchors":
-		return textResult(executeGetAnchorsTool(args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeGetAnchorsTool(a, root, globalIgnore)
+		})
 
 	case "replace_anchors":
-		return executeReplaceAnchorsTool(ctx, args, restrictedRoot, globalIgnore)
+		bound, root, err := bindPath(args, "path", ws, globalIgnore)
+		if err != nil {
+			return textResult(err.Error())
+		}
+		return executeReplaceAnchorsTool(ctx, bound, root, globalIgnore)
 	case "write":
-		return textResult(executeWriteTool(ctx, args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeWriteTool(ctx, a, root, globalIgnore)
+		})
 
 	case "delete":
-		return textResult(executeDeleteTool(ctx, args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeDeleteTool(ctx, a, root, globalIgnore)
+		})
 	case "update_user_preferences":
 		return textResult(executeUpdateUserPreferencesTool(ctx, args))
 	case "read_user_preferences":
 		return textResult(executeReadUserPreferencesTool())
 	case "sh":
-		return textResult(executeShTool(ctx, args, restrictedRoot, globalIgnore))
+		return textResult(executeShTool(ctx, args, ws, globalIgnore))
 	case "make_dir":
-		return textResult(executeMakeDirTool(ctx, args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeMakeDirTool(ctx, a, root, globalIgnore)
+		})
 
 	case "context_snapshot":
-		return textResult(executeContextSnapshotTool(args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeContextSnapshotTool(a, root, globalIgnore)
+		})
 	case "list_mcp_resources":
 		return textResult(executeListMCPResources(mcpManager))
 
@@ -127,38 +170,48 @@ func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *Ig
 		return textResult(executeListMCPResourceTemplates(mcpManager))
 
 	case "copy":
-		return textResult(executeCopyTool(ctx, args, restrictedRoot, globalIgnore))
+		return textResult(executeCopyTool(ctx, args, ws, globalIgnore))
 
 	case "rename":
-		return textResult(executeRenameTool(ctx, args, restrictedRoot, globalIgnore))
+		return withPath("path", func(a map[string]any, root string) string {
+			return executeRenameTool(ctx, a, root, globalIgnore)
+		})
 
 	case "move":
-		return textResult(executeMoveTool(ctx, args, restrictedRoot, globalIgnore))
+		return textResult(executeMoveTool(ctx, args, ws, globalIgnore))
 
 	case "read_mcp_resource":
 		return textResult(executeReadMCPResource(args, mcpManager))
 	case "lsp_active_servers":
-		return textResult(executeLSPActiveServers(restrictedRoot, globalIgnore))
+		return textResult(executeLSPActiveServersIn(ws, globalIgnore))
 
 	case "lsp_hover":
-		return textResult(executeLSPHover(args, restrictedRoot, globalIgnore))
+		return withPath("file", func(a map[string]any, root string) string {
+			return executeLSPHover(a, root, globalIgnore)
+		})
 
 	case "lsp_definition":
-		return textResult(executeLSPDefinition(args, restrictedRoot, globalIgnore))
+		return withPath("file", func(a map[string]any, root string) string {
+			return executeLSPDefinition(a, root, globalIgnore)
+		})
 
 	case "lsp_references":
-		return textResult(executeLSPReferences(args, restrictedRoot, globalIgnore))
+		return withPath("file", func(a map[string]any, root string) string {
+			return executeLSPReferences(a, root, globalIgnore)
+		})
 
 	case "lsp_diagnostics":
-		return textResult(executeLSPDiagnostics(args, restrictedRoot, globalIgnore))
+		return withPath("file", func(a map[string]any, root string) string {
+			return executeLSPDiagnostics(a, root, globalIgnore)
+		})
 
 	case "lsp_workspace_symbols":
-		return textResult(executeLSPWorkspaceSymbols(args, restrictedRoot, globalIgnore))
+		return textResult(executeLSPWorkspaceSymbolsIn(args, ws, globalIgnore))
 
 	case "questionary":
 		return textResult(executeQuestionaryTool(ctx, args))
 	case "spawn_subagents":
-		return textResult(executeSpawnSubagentsTool(ctx, args, globalIgnore, restrictedRoot, mcpManager))
+		return textResult(executeSpawnSubagentsTool(ctx, args, globalIgnore, ws, mcpManager))
 	case "computer":
 		if reason := ComputerUseBlockReason(); reason != "" {
 			return textResult("error: computer use is disabled: " + reason + " (switch to Anthropic, Gemini 3 or a Responses-compatible provider)")
@@ -169,59 +222,64 @@ func dispatchToolCall(ctx context.Context, call types.ToolCall, globalIgnore *Ig
 		if reason := ToolImageBlockReason(); reason != "" {
 			return textResult("error: read_media is unavailable: " + reason)
 		}
-		return executeReadMediaTool(args, restrictedRoot, globalIgnore)
+		return withPathResult("path", func(a map[string]any, root string) types.ToolResult {
+			return executeReadMediaTool(a, root, globalIgnore)
+		})
 
 	// ── git tools (read-only by default, see config/git.go) ──────────────
+	// The read-only ones answer for every allowed root that is a repository;
+	// a mutating call runs in the root that owns its explicit path, or in the
+	// primary root when it names none.
 	case "git_status":
-		return textResult(executeGitStatus(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitStatus))
 	case "git_diff":
-		return textResult(executeGitDiff(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitDiff))
 	case "git_log":
-		return textResult(executeGitLog(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitLog))
 	case "git_show":
-		return textResult(executeGitShow(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitShow))
 	case "git_blame":
-		return textResult(executeGitBlame(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitBlame))
 	case "git_ls_files":
-		return textResult(executeGitLsFiles(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitLsFiles))
 	case "git_config":
-		return textResult(executeGitConfig(args, restrictedRoot))
+		return textResult(gitReadOnWorkspace(ws, args, executeGitConfig))
 	case "git_add":
-		return textResult(executeGitAdd(ctx, args, restrictedRoot))
+		return textResult(executeGitAdd(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_commit":
-		return textResult(executeGitCommit(ctx, args, restrictedRoot))
+		return textResult(executeGitCommit(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_switch":
-		return textResult(executeGitSwitch(ctx, args, restrictedRoot))
+		return textResult(executeGitSwitch(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_restore":
-		return textResult(executeGitRestore(ctx, args, restrictedRoot))
+		return textResult(executeGitRestore(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_stash":
-		return textResult(executeGitStash(ctx, args, restrictedRoot))
+		return textResult(executeGitStash(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_init":
-		return textResult(executeGitInit(ctx, args, restrictedRoot))
+		return textResult(executeGitInit(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_branch":
-		return textResult(executeGitBranch(ctx, args, restrictedRoot))
+		return textResult(executeGitBranch(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_remote":
-		return textResult(executeGitRemote(ctx, args, restrictedRoot))
+		return textResult(executeGitRemote(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_fetch":
-		return textResult(executeGitFetch(ctx, args, restrictedRoot))
+		return textResult(executeGitFetch(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_pull":
-		return textResult(executeGitPull(ctx, args, restrictedRoot))
+		return textResult(executeGitPull(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_push":
-		return textResult(executeGitPush(ctx, args, restrictedRoot))
+		return textResult(executeGitPush(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_clone":
-		return textResult(executeGitClone(ctx, args, restrictedRoot))
+		return textResult(executeGitClone(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_reset":
-		return textResult(executeGitReset(ctx, args, restrictedRoot))
+		return textResult(executeGitReset(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_merge":
-		return textResult(executeGitMerge(ctx, args, restrictedRoot))
+		return textResult(executeGitMerge(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_rebase":
-		return textResult(executeGitRebase(ctx, args, restrictedRoot))
+		return textResult(executeGitRebase(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_cherry_pick":
-		return textResult(executeGitCherryPick(ctx, args, restrictedRoot))
+		return textResult(executeGitCherryPick(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_revert":
-		return textResult(executeGitRevert(ctx, args, restrictedRoot))
+		return textResult(executeGitRevert(ctx, args, gitWorkspaceRoot(args, ws)))
 	case "git_tag":
-		return textResult(executeGitTag(ctx, args, restrictedRoot))
+		return textResult(executeGitTag(ctx, args, gitWorkspaceRoot(args, ws)))
 	default:
 		return textResult(fmt.Sprintf("error: unknown tool %s", name))
 	} // End of switch

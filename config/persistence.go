@@ -289,6 +289,19 @@ var configMigrations = store.Migrations{
 		doc["schema"] = json.RawMessage(strconv.Itoa(16))
 		return json.Marshal(doc)
 	},
+	16: func(data []byte) ([]byte, error) {
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
+		// v17 adds the remembered workspace root sets (/cd): "workspaces" is
+		// optional and defaults to empty, so only the version is stamped here.
+		doc["schema"] = json.RawMessage(strconv.Itoa(17))
+		return json.Marshal(doc)
+	},
 }
 
 // Load reads config.json into the in-memory configuration, ignoring errors.

@@ -321,7 +321,7 @@ func TestTurnJournalCapturesWhatAToolWrites(t *testing.T) {
 		Name:      "write",
 		Arguments: map[string]interface{}{"path": "made.txt", "content": "hello\n"},
 	}}
-	res := tools.ExecuteToolWithSpinner(context.Background(), call, s.GlobalIgnore, root, nil)
+	res := tools.ExecuteToolWithSpinner(context.Background(), call, s.GlobalIgnore, tools.Workspace{Primary: root}, nil)
 	if strings.HasPrefix(res.Text, "error") {
 		t.Fatalf("write failed: %s", res.Text)
 	}
@@ -364,7 +364,7 @@ func TestUndoRevertsWhatShellCommandsChanged(t *testing.T) {
 			Name:      "sh",
 			Arguments: map[string]any{"command": command, "timeout_seconds": float64(20)},
 		}}
-		return tools.ExecuteToolWithSpinner(context.Background(), call, s.GlobalIgnore, root, nil).Text
+		return tools.ExecuteToolWithSpinner(context.Background(), call, s.GlobalIgnore, tools.Workspace{Primary: root}, nil).Text
 	}
 
 	s.beginTurn()
@@ -390,6 +390,61 @@ func TestUndoRevertsWhatShellCommandsChanged(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "added.txt")); !os.IsNotExist(err) {
 		t.Fatalf("the file the shell command created survived the rewind: %v", err)
+	}
+}
+
+// A file the walk stops seeing without being deleted — a .gitignore written
+// during the same turn hides it — is not a deletion: the turn changed nothing,
+// and a rewind must leave it alone.
+func TestJournalDoesNotRecordAnUnvisitedFileAsDeleted(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	keep := filepath.Join(root, "keep.txt")
+	if err := os.WriteFile(keep, []byte("still here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+
+	// The turn hides the file behind a new ignore rule.
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("keep.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.Collect(root, tools.LoadIgnoreFiles(root))
+
+	if got := s.journal.turnChangedFiles(1); got != 0 {
+		t.Fatalf("the journal recorded %d change(s) for a turn that hid a file, want none", got)
+	}
+	if _, err := s.rewindToTurn(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "still here\n" {
+		t.Fatalf("keep.txt = %q (%v), want it untouched", data, err)
+	}
+}
+
+// The guard must not swallow a real deletion: a file that is gone is still
+// recorded, and a rewind recreates it.
+func TestJournalStillRecordsARealDeletion(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	gone := filepath.Join(root, "gone.txt")
+	if err := os.WriteFile(gone, []byte("bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.Collect(root, tools.LoadIgnoreFiles(root))
+
+	if got := s.journal.turnChangedFiles(1); got != 1 {
+		t.Fatalf("the journal recorded %d change(s), want the deleted file", got)
+	}
+	if _, err := s.rewindToTurn(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(gone); err != nil || string(data) != "bye\n" {
+		t.Fatalf("gone.txt = %q (%v), want it recreated", data, err)
 	}
 }
 

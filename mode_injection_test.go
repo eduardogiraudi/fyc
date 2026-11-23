@@ -55,7 +55,7 @@ func TestClearInvalidatesAnchors(t *testing.T) {
 	call := types.ToolCall{Function: types.ToolCallFunction{
 		Name: "get_anchors", Arguments: map[string]interface{}{"path": "file.txt"},
 	}}
-	annotated := tools.ExecuteToolWithSpinner(context.Background(), call, nil, root, nil).Text
+	annotated := tools.ExecuteToolWithSpinner(context.Background(), call, nil, tools.Workspace{Primary: root}, nil).Text
 	anchor, _, ok := strings.Cut(annotated, "\u00a7")
 	if !ok {
 		t.Fatalf("get_anchors: %s", annotated)
@@ -65,7 +65,7 @@ func TestClearInvalidatesAnchors(t *testing.T) {
 	call.Function = types.ToolCallFunction{Name: "replace_anchors", Arguments: map[string]interface{}{
 		"path": "file.txt", "start_anchor": anchor, "end_anchor": anchor, "replacement": "agent",
 	}}
-	res := tools.ExecuteToolWithSpinner(context.Background(), call, nil, root, nil).Text
+	res := tools.ExecuteToolWithSpinner(context.Background(), call, nil, tools.Workspace{Primary: root}, nil).Text
 	if !strings.Contains(res, "file not loaded") {
 		t.Fatalf("old anchors survived /clear: %s", res)
 	}

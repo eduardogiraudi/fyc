@@ -18,7 +18,7 @@ func TestSubagentRejectsSiblingWithSharedPrefix(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(sibling) })
 
-	res := RunSubagent(context.Background(), SubagentConfig{ID: "x", Subdirectory: sibling, Instructions: "noop", MaxIterations: 1}, nil, root, nil, nil)
+	res := RunSubagent(context.Background(), SubagentConfig{ID: "x", Subdirectory: sibling, Instructions: "noop", MaxIterations: 1}, nil, Workspace{Primary: root}, nil, nil)
 	if !strings.Contains(res, "outside the restricted root") {
 		t.Fatalf("the sibling directory was accepted as a subdirectory: %s", res)
 	}
@@ -33,7 +33,7 @@ func TestSubagentRejectsSymlinkOutsideRoot(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	res := RunSubagent(context.Background(), SubagentConfig{ID: "x", Subdirectory: "logs", Instructions: "noop", MaxIterations: 1}, nil, root, nil, nil)
+	res := RunSubagent(context.Background(), SubagentConfig{ID: "x", Subdirectory: "logs", Instructions: "noop", MaxIterations: 1}, nil, Workspace{Primary: root}, nil, nil)
 	if !strings.Contains(res, "resolves outside the restricted root") {
 		t.Fatalf("the symlinked directory was accepted as a subdirectory: %s", res)
 	}

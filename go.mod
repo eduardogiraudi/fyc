@@ -47,6 +47,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect

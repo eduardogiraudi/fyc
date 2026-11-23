@@ -9,6 +9,7 @@ import (
 // sandboxConfig holds all parameters needed to build a sandboxed command.
 type sandboxConfig struct {
 	RestrictedRoot string   // process cwd, always r+w
+	Roots          []string // every allowed workspace root (/cd): their .git stays masked
 	AllowedRW      []string // read-write paths
 	AllowedRO      []string // read-only paths (system dirs)
 	DenyEnv        []string // env var names to strip from child process
@@ -29,10 +30,33 @@ type sandboxResult struct {
 	spawn func() (sandboxProcess, error)
 }
 
-func workspaceSensitivePaths(restrictedRoot string) []string {
-	return []string{
-		restrictedRoot + "/.git",
+// sandboxRoots returns the workspace roots whose metadata must be masked,
+// falling back to the process cwd when the caller did not enumerate them.
+func sandboxRoots(cfg sandboxConfig) []string {
+	if len(cfg.Roots) > 0 {
+		return cfg.Roots
 	}
+	return []string{cfg.RestrictedRoot}
+}
+
+// workspaceSensitivePaths lists the repository metadata masked inside the
+// sandbox. Every allowed root contributes its own .git, so a second root cannot
+// be used to read a repository's internals through `sh`.
+func workspaceSensitivePaths(roots ...string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		p := root + "/.git"
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // filteredEnv returns os.Environ() with keys in denyKeys removed. Names are

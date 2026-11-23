@@ -55,7 +55,7 @@ func TestSniffLivePersistentProcess(t *testing.T) {
 
 	start := func(cmd string) int {
 		t.Helper()
-		out := executeShTool(ctx, map[string]any{"command": cmd, "persistence": true}, root, ignore)
+		out := executeShTool(ctx, map[string]any{"command": cmd, "persistence": true}, Workspace{Primary: root}, ignore)
 		t.Logf("sh -> %s", strings.ReplaceAll(out, "\n", " | "))
 		if !strings.Contains(out, "persistent process started") {
 			t.Fatalf("not registered as persistent: %s", out)

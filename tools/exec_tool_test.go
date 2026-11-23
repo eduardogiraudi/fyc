@@ -221,7 +221,7 @@ func TestShTimeout(t *testing.T) {
 			}
 		})
 	}
-	out := executeShTool(context.Background(), map[string]any{"command": "must not run", "timeout_seconds": float64(301)}, "", nil)
+	out := executeShTool(context.Background(), map[string]any{"command": "must not run", "timeout_seconds": float64(301)}, Workspace{}, nil)
 	if !strings.HasPrefix(out, "error: timeout_seconds") {
 		t.Fatalf("invalid timeout not rejected before execution: %s", out)
 	}

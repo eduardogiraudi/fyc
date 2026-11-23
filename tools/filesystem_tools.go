@@ -187,8 +187,10 @@ func executeDeleteTool(ctx context.Context, args map[string]any, restrictedRoot 
 	return "deleted"
 }
 
-// executeCopyTool handles the "copy" case.
-func executeCopyTool(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
+// executeCopyTool handles the "copy" case. Source and destination may live in
+// different allowed roots: the payload then moves through both os.Root handles,
+// never through a plain absolute path.
+func executeCopyTool(ctx context.Context, args map[string]any, ws Workspace, globalIgnore *IgnoreManager) string {
 	source, ok := args["source"].(string)
 	if !ok || source == "" {
 		return "error: source argument required"
@@ -198,28 +200,33 @@ func executeCopyTool(ctx context.Context, args map[string]any, restrictedRoot st
 		return "error: destination argument required"
 	}
 
-	root, err := getRoot(restrictedRoot)
+	srcRootPath, srcRel, err := ws.resolve(source, globalIgnore)
+	if err != nil {
+		return err.Error()
+	}
+	dstRootPath, dstRel, err := ws.resolve(dest, globalIgnore)
+	if err != nil {
+		return err.Error()
+	}
+
+	srcRoot, err := os.OpenRoot(srcRootPath)
 	if err != nil {
 		return fmt.Errorf("error opening root: %w", err).Error()
 	}
-	defer root.Close()
-
-	srcRel, err := validatePathInRoot(source, restrictedRoot, globalIgnore)
+	defer srcRoot.Close()
+	dstRoot, err := os.OpenRoot(dstRootPath)
 	if err != nil {
-		return err.Error()
+		return fmt.Errorf("error opening root: %w", err).Error()
 	}
-	dstRel, err := validatePathInRoot(dest, restrictedRoot, globalIgnore)
-	if err != nil {
-		return err.Error()
-	}
+	defer dstRoot.Close()
 
 	// Check if source exists
-	if _, err := root.Lstat(srcRel); err != nil {
+	if _, err := srcRoot.Lstat(srcRel); err != nil {
 		return fmt.Sprintf("error: source does not exist: %v", err)
 	}
 
-	safeSrcAbs := filepath.Join(restrictedRoot, srcRel)
-	safeDstAbs := filepath.Join(restrictedRoot, dstRel)
+	safeSrcAbs := filepath.Join(srcRootPath, srcRel)
+	safeDstAbs := filepath.Join(dstRootPath, dstRel)
 	allowed, suggestion := askCopyPermission(ctx, safeSrcAbs, safeDstAbs)
 	if !allowed {
 		if suggestion != "" {
@@ -229,7 +236,11 @@ func executeCopyTool(ctx context.Context, args map[string]any, restrictedRoot st
 	}
 	_ = suggestion
 
-	if err := copyPathInRoot(root, srcRel, dstRel); err != nil {
+	if srcRootPath == dstRootPath {
+		if err := copyPathInRoot(srcRoot, srcRel, dstRel); err != nil {
+			return fmt.Sprintf("copy error: %v", err)
+		}
+	} else if err := copyBetweenRoots(srcRoot, srcRel, dstRoot, dstRel); err != nil {
 		return fmt.Sprintf("copy error: %v", err)
 	}
 	return "copied"
@@ -284,8 +295,9 @@ func executeRenameTool(ctx context.Context, args map[string]any, restrictedRoot 
 	return "renamed"
 }
 
-// executeMoveTool handles the "move" case.
-func executeMoveTool(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
+// executeMoveTool handles the "move" case. Across allowed roots it copies the
+// payload through both os.Root handles and then deletes the source.
+func executeMoveTool(ctx context.Context, args map[string]any, ws Workspace, globalIgnore *IgnoreManager) string {
 	source, ok := args["source"].(string)
 	if !ok || source == "" {
 		return "error: source argument required"
@@ -295,23 +307,28 @@ func executeMoveTool(ctx context.Context, args map[string]any, restrictedRoot st
 		return "error: destination argument required"
 	}
 
-	root, err := getRoot(restrictedRoot)
+	srcRootPath, srcRel, err := ws.resolve(source, globalIgnore)
+	if err != nil {
+		return err.Error()
+	}
+	dstRootPath, dstRel, err := ws.resolve(dest, globalIgnore)
+	if err != nil {
+		return err.Error()
+	}
+
+	srcRoot, err := os.OpenRoot(srcRootPath)
 	if err != nil {
 		return fmt.Errorf("error opening root: %w", err).Error()
 	}
-	defer root.Close()
-
-	srcRel, err := validatePathInRoot(source, restrictedRoot, globalIgnore)
+	defer srcRoot.Close()
+	dstRoot, err := os.OpenRoot(dstRootPath)
 	if err != nil {
-		return err.Error()
+		return fmt.Errorf("error opening root: %w", err).Error()
 	}
-	dstRel, err := validatePathInRoot(dest, restrictedRoot, globalIgnore)
-	if err != nil {
-		return err.Error()
-	}
+	defer dstRoot.Close()
 
-	safeSrcAbs := filepath.Join(restrictedRoot, srcRel)
-	safeDstAbs := filepath.Join(restrictedRoot, dstRel)
+	safeSrcAbs := filepath.Join(srcRootPath, srcRel)
+	safeDstAbs := filepath.Join(dstRootPath, dstRel)
 	allowed, suggestion := askMovePermission(ctx, safeSrcAbs, safeDstAbs)
 	if !allowed {
 		if suggestion != "" {
@@ -321,8 +338,17 @@ func executeMoveTool(ctx context.Context, args map[string]any, restrictedRoot st
 	}
 	_ = suggestion
 
-	if err := renameInRoot(root, srcRel, dstRel); err != nil {
+	if srcRootPath == dstRootPath {
+		if err := renameInRoot(srcRoot, srcRel, dstRel); err != nil {
+			return fmt.Sprintf("move error: %v", err)
+		}
+		return "moved"
+	}
+	if err := copyBetweenRoots(srcRoot, srcRel, dstRoot, dstRel); err != nil {
 		return fmt.Sprintf("move error: %v", err)
+	}
+	if err := deletePathInRoot(srcRoot, srcRel); err != nil {
+		return fmt.Sprintf("move error: cannot remove the source: %v", err)
 	}
 	return "moved"
 }

@@ -120,6 +120,9 @@ func (s *ChatSession) ensureUndoJournal() *undoJournal {
 		return nil
 	}
 	s.journal = newUndoJournal(s.RestrictedRoot, s.SessionID, undoJournalDir(getChatHistoryDir(), s.SessionID))
+	// The journal covers every root the session allowed (/cd), not just the
+	// primary one: a change in an extra root has to be revertible too.
+	s.journal.SetRoots(s.workspaceRoots(), s.GlobalIgnore)
 	// The tool dispatcher feeds the journal: that is how a turn's changes reach it
 	// between the turn's own Sync calls.
 	tools.SetTurnJournal(s.journal)

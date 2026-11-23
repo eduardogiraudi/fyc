@@ -101,13 +101,96 @@ func findSkillDir(name, restrictedRoot string) string {
 }
 
 func getSkillLocations(restrictedRoot string) []string {
+	return getSkillLocationsIn([]string{restrictedRoot})
+}
+
+// getSkillLocationsIn lists every skill location, global ones first and then the
+// project-level directories of each allowed root: the later entries win, so the
+// primary root is searched last (see findSkillDir).
+func getSkillLocationsIn(roots []string) []string {
 	home, _ := os.UserHomeDir()
-	return []string{
+	out := []string{
 		filepath.Join(store.ConfigDir(), "skills"),
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".claude", "skills"),
-		filepath.Join(restrictedRoot, ".claude", "skills"),
-		filepath.Join(restrictedRoot, ".fyc", "skills"),
-		filepath.Join(restrictedRoot, ".agents", "skills"),
 	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		out = append(out,
+			filepath.Join(root, ".claude", "skills"),
+			filepath.Join(root, ".fyc", "skills"),
+			filepath.Join(root, ".agents", "skills"),
+		)
+	}
+	return out
+}
+
+// DiscoverSkillsIn is DiscoverSkills across every allowed root.
+func DiscoverSkillsIn(ws Workspace) map[string]string {
+	skills := map[string]string{}
+	for _, base := range getSkillLocationsIn(ws.Roots()) {
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(base, e.Name(), "SKILL.md"))
+			if err != nil {
+				continue
+			}
+			skills[e.Name()] = extractSkillDescription(string(data))
+		}
+	}
+	for _, root := range ws.Roots() {
+		for _, installed := range plugins.Load(root) {
+			for _, skill := range installed.Package.Skills {
+				skills[skill.Name] = skill.Description
+			}
+		}
+	}
+	return skills
+}
+
+// FindSkillPathIn is FindSkillPath across every allowed root.
+func FindSkillPathIn(ws Workspace, name string) string {
+	result := ""
+	for _, base := range getSkillLocationsIn(ws.Roots()) {
+		p := filepath.Join(base, name, "SKILL.md")
+		if _, err := os.Stat(p); err == nil {
+			result = p
+		}
+	}
+	for _, root := range ws.Roots() {
+		for _, installed := range plugins.Load(root) {
+			for _, skill := range installed.Package.Skills {
+				if skill.Name == name {
+					return filepath.Join(installed.Entry.Path, filepath.FromSlash(skill.Path))
+				}
+			}
+		}
+	}
+	return result
+}
+
+// findSkillDirIn is findSkillDir across every allowed root.
+func findSkillDirIn(name string, ws Workspace) string {
+	if strings.Contains(name, "--") {
+		if p := FindSkillPathIn(ws, name); p != "" {
+			return filepath.Dir(p)
+		}
+	}
+	locations := getSkillLocationsIn(ws.Roots())
+	for i := len(locations) - 1; i >= 0; i-- {
+		p := filepath.Join(locations[i], name)
+		info, err := os.Stat(p)
+		if err == nil && info.IsDir() {
+			return p
+		}
+	}
+	return ""
 }

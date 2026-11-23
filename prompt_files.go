@@ -17,7 +17,7 @@ const maxPromptTextBytes = 512 << 10
 const maxPromptImageBytes = 24 << 20
 const maxPromptFileTokens = 32_000
 
-func preparePromptFiles(input, root string, ignore *tools.IgnoreManager) (types.Message, []string, error) {
+func preparePromptFiles(input string, ws tools.Workspace, ignore *tools.IgnoreManager) (types.Message, []string, error) {
 	msg := types.Message{Role: "user", Content: input}
 	var names []string
 	seen := make(map[string]bool)
@@ -34,7 +34,7 @@ func preparePromptFiles(input, root string, ignore *tools.IgnoreManager) (types.
 		if len(names) == maxPromptFiles {
 			return types.Message{}, nil, fmt.Errorf("at most %d files per prompt", maxPromptFiles)
 		}
-		result, err := tools.PromptFile(path, root, ignore)
+		result, err := tools.PromptFileIn(path, ws, ignore)
 		if err != nil {
 			return types.Message{}, nil, fmt.Errorf("%s: %w", ref.Path, err)
 		}
@@ -63,7 +63,7 @@ func preparePromptFiles(input, root string, ignore *tools.IgnoreManager) (types.
 
 func (s *ChatSession) attachPromptFiles(input, fileInput string) (types.Message, bool) {
 	// Only user-authored mentions attach files, never expanded skill instructions.
-	msg, names, err := preparePromptFiles(fileInput, s.RestrictedRoot, s.GlobalIgnore)
+	msg, names, err := preparePromptFiles(fileInput, s.workspace(), s.GlobalIgnore)
 	if err == nil {
 		msg.Content = input + strings.TrimPrefix(msg.Content, fileInput)
 	}

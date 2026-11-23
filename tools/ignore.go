@@ -23,21 +23,45 @@ type ignoreFile struct {
 // IgnoreManager holds scoped .gitignore and .fycignore rules.
 type IgnoreManager struct {
 	files         []ignoreFile
-	gitDir        string // precomputed: restrictedRoot + "/.git"
+	gitDir        string // precomputed: primary root + "/.git"
 	gitDirWithSep string // precomputed: gitDir + separator
+	// extraGitDirs holds "<root>/.git" for every additional allowed root (/cd):
+	// repository metadata stays unreachable there too.
+	extraGitDirs []string
 }
 
 // LoadIgnoreFiles collects both ignore families. A .fycignore replaces all
 // applicable git rules within its subtree, even when the fyc file is empty.
 func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
-	gitDir := filepath.Join(restrictedRoot, ".git")
-	im := &IgnoreManager{
-		gitDir:        gitDir,
-		gitDirWithSep: gitDir + string(filepath.Separator),
+	return LoadWorkspaceIgnore([]string{restrictedRoot})
+}
+
+// LoadWorkspaceIgnore collects both ignore families for every allowed root. Each
+// rule keeps its absolute scope, so the rules of one root never apply to
+// another; the .git guard covers all of them.
+func LoadWorkspaceIgnore(roots []string) *IgnoreManager {
+	im := &IgnoreManager{}
+	for _, root := range roots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		gitDir := filepath.Join(root, ".git")
+		if im.gitDir == "" {
+			im.gitDir = gitDir
+			im.gitDirWithSep = gitDir + string(filepath.Separator)
+		} else {
+			im.extraGitDirs = append(im.extraGitDirs, gitDir)
+		}
+		im.collect(root)
 	}
+	return im
+}
+
+// collect walks one root and appends the ignore files it finds.
+func (im *IgnoreManager) collect(root string) {
 	var mu sync.Mutex
 	conf := fastwalk.Config{Follow: false}
-	fastwalk.Walk(&conf, restrictedRoot, func(path string, d fs.DirEntry, err error) error {
+	fastwalk.Walk(&conf, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -55,14 +79,14 @@ func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
 		if err != nil {
 			return nil
 		}
-		relPath, _ := filepath.Rel(restrictedRoot, path)
+		relPath, _ := filepath.Rel(root, path)
 		scopeDir := filepath.Dir(relPath)
 		if scopeDir == "." {
 			scopeDir = ""
 		}
-		scopeAbs := restrictedRoot
+		scopeAbs := root
 		if scopeDir != "" {
-			scopeAbs = filepath.Join(restrictedRoot, scopeDir)
+			scopeAbs = filepath.Join(root, scopeDir)
 		}
 		entry := ignoreFile{
 			matcher:         matcher,
@@ -76,7 +100,6 @@ func LoadIgnoreFiles(restrictedRoot string) *IgnoreManager {
 		mu.Unlock()
 		return nil
 	})
-	return im
 }
 
 // isIgnored checks whether a given absolute path matches any of the scoped
@@ -88,6 +111,13 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 	// make HasPrefix match every path and deny the whole workspace.
 	if im.gitDirWithSep != "" && (absPath == im.gitDir || strings.HasPrefix(absPath, im.gitDirWithSep)) {
 		return true
+	}
+	// The additional roots allowed with /cd keep their repository metadata
+	// unreachable too, exactly like the primary root.
+	for _, gitDir := range im.extraGitDirs {
+		if absPath == gitDir || strings.HasPrefix(absPath, gitDir+string(filepath.Separator)) {
+			return true
+		}
 	}
 	// Always block access to the rule files themselves.
 	baseName := filepath.Base(absPath)

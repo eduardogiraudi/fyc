@@ -46,7 +46,7 @@ func buildLinuxSandboxCmd(ctx context.Context, cfg sandboxConfig) (sandboxResult
 	for _, p := range sensitivePaths(home) {
 		args = append(args, "--tmpfs", p) // mount empty tmpfs on top
 	}
-	for _, p := range workspaceSensitivePaths(cfg.RestrictedRoot) {
+	for _, p := range workspaceSensitivePaths(sandboxRoots(cfg)...) {
 		if _, err := os.Stat(p); err == nil {
 			args = append(args, "--tmpfs", p)
 		}

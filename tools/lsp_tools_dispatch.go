@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 )
 
 // ─── LSP tool dispatch ───────────────────────────────────────────────────────
@@ -23,6 +24,32 @@ func executeLSPActiveServers(restrictedRoot string, globalIgnore *IgnoreManager)
 		return fmt.Sprintf("lsp error: %v", err)
 	}
 	return formatActiveLSPs(mgr.ActiveLSPs())
+}
+
+// executeLSPActiveServersIn starts and lists the servers of every allowed root.
+// One root prints exactly what executeLSPActiveServers printed; with more than
+// one the servers are grouped under the root they belong to, so a symbol search
+// can name the right workspace.
+func executeLSPActiveServersIn(ws Workspace, globalIgnore *IgnoreManager) string {
+	roots := ws.Roots()
+	if len(roots) <= 1 {
+		return executeLSPActiveServers(ws.primaryRoot(), globalIgnore)
+	}
+	var b strings.Builder
+	found := false
+	for _, root := range roots {
+		mgr, err := getLSPManager(root, globalIgnore)
+		if err != nil {
+			b.WriteString(fmt.Sprintf("## %s\nno language server: %v\n", root, err))
+			continue
+		}
+		found = true
+		b.WriteString(fmt.Sprintf("## %s\n%s\n", root, formatActiveLSPs(mgr.ActiveLSPs())))
+	}
+	if !found {
+		return "no active LSP servers"
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // executeLSPHover handles the "lsp_hover" case.
@@ -103,6 +130,27 @@ func executeLSPDiagnostics(args map[string]any, restrictedRoot string, globalIgn
 		return fmt.Sprintf("lsp error: %v", err)
 	}
 	return formatJSON(diags)
+}
+
+// executeLSPWorkspaceSymbolsIn handles "lsp_workspace_symbols" across every
+// allowed root: the first root whose active servers include lsp_name answers.
+func executeLSPWorkspaceSymbolsIn(args map[string]any, ws Workspace, globalIgnore *IgnoreManager) string {
+	lspName, _ := args["lsp_name"].(string)
+	if lspName == "" {
+		return executeLSPWorkspaceSymbols(args, ws.primaryRoot(), globalIgnore)
+	}
+	for _, root := range ws.Roots() {
+		mgr, err := getLSPManager(root, globalIgnore)
+		if err != nil {
+			continue
+		}
+		for _, active := range mgr.ActiveLSPs() {
+			if active == lspName {
+				return executeLSPWorkspaceSymbols(args, root, globalIgnore)
+			}
+		}
+	}
+	return executeLSPWorkspaceSymbols(args, ws.primaryRoot(), globalIgnore)
 }
 
 // executeLSPWorkspaceSymbols handles the "lsp_workspace_symbols" case.

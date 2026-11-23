@@ -42,7 +42,7 @@ func TestSniffLivePersistentProcess(t *testing.T) {
 
 	start := func(cmd string) int {
 		t.Helper()
-		out := executeShTool(ctx, map[string]any{"command": cmd, "persistence": true}, root, ignore)
+		out := executeShTool(ctx, map[string]any{"command": cmd, "persistence": true}, Workspace{Primary: root}, ignore)
 		t.Logf("sh -> %s", strings.ReplaceAll(out, "\n", " | "))
 		if !strings.Contains(out, "persistent process started") {
 			t.Fatalf("not registered as persistent: %s", out)
@@ -158,7 +158,7 @@ func TestShLiveOneShot(t *testing.T) {
 				defer timer.Stop()
 			}
 			start := time.Now()
-			out := executeShTool(ctx, map[string]any{"command": tc.command, "persistence": false, "timeout_seconds": tc.timeout}, root, nil)
+			out := executeShTool(ctx, map[string]any{"command": tc.command, "persistence": false, "timeout_seconds": tc.timeout}, Workspace{Primary: root}, nil)
 			t.Logf("sh (%s): %s", time.Since(start), out)
 			if !strings.Contains(out, tc.status) || !strings.Contains(out, tc.output) {
 				t.Fatal(out)

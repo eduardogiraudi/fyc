@@ -18,38 +18,10 @@ func getRoot(restrictedRoot string) (*os.Root, error) {
 // validatePathInRoot checks that a requested path is within the restricted root,
 // cleans it, and verifies it's not ignored. Returns the safe relative path.
 func validatePathInRoot(requestedPath string, restrictedRoot string, globalIgnore *IgnoreManager) (relPath string, err error) {
-	if requestedPath == "" {
-		return "", fmt.Errorf("empty path")
-	}
-
-	cleanPath := filepath.Clean(requestedPath)
-
-	// Absolute paths are checked against the root below, after both sides are
-	// resolved; here only a relative path that climbs out is refused.
-	if !filepath.IsAbs(cleanPath) && escapesRoot(cleanPath) {
-		return "", fmt.Errorf("access denied: path traversal not allowed")
-	}
-
-	if filepath.IsAbs(requestedPath) {
-		rootAbs, err := store.ResolvePath(restrictedRoot)
-		if err != nil {
-			return "", fmt.Errorf("cannot resolve restricted root: %w", err)
-		}
-		relPath, err = relPathInRoot(requestedPath, rootAbs)
-		if err != nil {
-			return "", fmt.Errorf("access denied: %v", err)
-		}
-		cleanPath = relPath
-	}
-
-	if globalIgnore != nil {
-		absPath := filepath.Join(restrictedRoot, cleanPath)
-		if globalIgnore.isIgnored(absPath, restrictedRoot) {
-			return "", fmt.Errorf("access denied: %s is listed in an ignore file", requestedPath)
-		}
-	}
-
-	return cleanPath, nil
+	// The single-root spelling of Workspace.resolve: every caller that only ever
+	// sees the primary root keeps working unchanged.
+	_, relPath, err = Workspace{Primary: restrictedRoot}.resolve(requestedPath, globalIgnore)
+	return relPath, err
 }
 
 // escapesRoot reports whether a cleaned relative path leaves its base. A name

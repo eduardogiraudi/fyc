@@ -140,7 +140,7 @@ func buildSBProfile(cfg sandboxConfig) string {
 		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", sbPath(p)))
 	}
 	sb.WriteString("\n")
-	for _, p := range workspaceSensitivePaths(cfg.RestrictedRoot) {
+	for _, p := range workspaceSensitivePaths(sandboxRoots(cfg)...) {
 		sb.WriteString(fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", sbPath(p)))
 	}
 	sb.WriteString("\n")

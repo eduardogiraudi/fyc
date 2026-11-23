@@ -1009,7 +1009,6 @@ func rtSetControlledDacl(t *testing.T, path string, user, group *windows.SID) {
 // mint another):
 //
 //	FYC_RESTRICTED_TOKEN_LIVE=1 go test -v -run TestRestrictedTokenP4 ./tools/
-//	FYC_RESTRICTED_TOKEN_LIVE=1 go test -v -run TestRestrictedTokenP4 ./tools/
 func TestRestrictedTokenP4AggressiveDisableList(t *testing.T) {
 	rtRequireLive(t)
 

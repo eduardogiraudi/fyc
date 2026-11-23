@@ -85,6 +85,20 @@ func PromptFile(path, restrictedRoot string, ignore *IgnoreManager) (types.ToolR
 	return types.ToolResult{Text: string(data)}, nil
 }
 
+// PromptFileIn attaches a file that may live in any allowed root. The path is
+// resolved against the workspace first and then handed to PromptFile as a name
+// inside the owning root, so @/abs/path works for an extra root too.
+func PromptFileIn(path string, ws Workspace, ignore *IgnoreManager) (types.ToolResult, error) {
+	if ignore == nil {
+		ignore = LoadWorkspaceIgnore(ws.Roots())
+	}
+	owner, rel, err := ws.resolve(path, ignore)
+	if err != nil {
+		return types.ToolResult{}, err
+	}
+	return PromptFile(rel, owner, ignore)
+}
+
 // PromptFileSuggestions browses one directory, with bounded work per keystroke.
 func PromptFileSuggestions(query, restrictedRoot string, ignore *IgnoreManager) ([]string, error) {
 	if len([]rune(query)) > mentions.MaxPathRunes {

@@ -49,6 +49,14 @@ type ChatSession struct {
 	// tool policy keeps applying regardless (see getToolsForAI).
 	persistentModeInjected string
 	RestrictedRoot         string
+	// ExtraRoots are the additional directories the user allowed with /cd. They
+	// are reachable only through absolute paths, and they live for the session
+	// unless the set was saved in config.json.
+	ExtraRoots []string
+	// ws caches the resolved workspace of RestrictedRoot+ExtraRoots. It is
+	// maintained by setExtraRoots/initRestrictedRoot; every tool call and the
+	// system prompt read it through workspace().
+	ws tools.Workspace
 	// ProjectContext is the rendered <project_context> block (the AGENTS.md
 	// instruction chain) injected into the system prompt. Empty when there is
 	// no instruction file or the feature is disabled.
@@ -178,6 +186,64 @@ func (s *ChatSession) initRestrictedRoot() {
 	if err != nil {
 		s.RestrictedRoot = "."
 	}
+	s.ws = tools.NewWorkspace(s.RestrictedRoot, s.ExtraRoots)
+}
+
+// workspace is the set of directories tools may touch: the restricted root plus
+// the ones /cd allowed.
+func (s *ChatSession) workspace() tools.Workspace {
+	if s == nil {
+		return tools.Workspace{}
+	}
+	if s.ws.Primary == "" {
+		s.ws = tools.NewWorkspace(s.RestrictedRoot, s.ExtraRoots)
+	}
+	return s.ws
+}
+
+// workspaceRoots lists every allowed root, primary first.
+func (s *ChatSession) workspaceRoots() []string {
+	if s == nil {
+		return nil
+	}
+	return s.workspace().Roots()
+}
+
+// setRoots installs the root set without rebuilding anything derived from it.
+// It is what startup uses: the ignore rules, the project context and the system
+// prompt are built a few lines later by the normal initialisation, which already
+// runs behind the startup spinner.
+func (s *ChatSession) setRoots(roots []string) {
+	// config.NormalizeRoots is the single normalisation rule: absolute,
+	// symlink-resolved, no duplicate and no root nested in another.
+	normalized := config.NormalizeRoots(s.RestrictedRoot, roots)
+	if len(normalized) > 0 {
+		normalized = normalized[1:] // the primary root is not an "extra"
+	}
+	s.ExtraRoots = normalized
+	s.ws = tools.NewWorkspace(s.RestrictedRoot, s.ExtraRoots)
+}
+
+// setExtraRoots replaces the additional roots and rebuilds everything derived
+// from the root set: ignore rules, the AGENTS.md chain, the undo journal's
+// baseline (so a newly allowed root has pre-images from this moment), the
+// LSP/git availability layer and the system prompt.
+func (s *ChatSession) setExtraRoots(roots []string) {
+	s.setRoots(roots)
+
+	s.GlobalIgnore = tools.LoadWorkspaceIgnore(s.workspaceRoots())
+	if s.journal != nil {
+		s.journal.SetRoots(s.workspaceRoots(), s.GlobalIgnore)
+		s.journal.Sync(s.RestrictedRoot, s.GlobalIgnore)
+	}
+	s.reloadProjectContext()
+	s.refreshLSPToolAvailability()
+	s.refreshGitToolAvailability()
+	// Before the first system prompt exists there is nothing to update: startup
+	// builds it from the final root set a moment later.
+	if hasSystemPrompt(s.ChatHistory) {
+		updateSystemPrompt(s)
+	}
 }
 
 func computeShortSHA() string {
@@ -275,8 +341,16 @@ func (s *ChatSession) relevantLSPServersAvailable() bool {
 	ignored := func(absPath string) bool {
 		return s.GlobalIgnore != nil && s.GlobalIgnore.IsIgnored(absPath, s.RestrictedRoot)
 	}
-	presentExts := lsp.ScanExtensions(s.RestrictedRoot, ignored)
-	return len(lsp.FilterRelevant(lsp.Discover(tools.LSPOptions()), presentExts)) > 0
+	discovered := lsp.Discover(tools.LSPOptions())
+	// Every allowed root counts: an extra root with a supported language makes
+	// the LSP tools worth exposing even when the primary root has none.
+	for _, root := range s.workspaceRoots() {
+		presentExts := lsp.ScanExtensions(root, ignored)
+		if len(lsp.FilterRelevant(discovered, presentExts)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ChatSession) refreshLSPToolAvailability() bool {
@@ -325,7 +399,14 @@ func (s *ChatSession) refreshGitToolAvailability() bool {
 	available := tools.GitAvailable()
 	inRepo := false
 	if available {
-		_, inRepo = tools.RefreshGitRepoRoot(s.RestrictedRoot)
+		// A repository in any allowed root is enough: the git tools answer for
+		// the whole workspace, not just the primary root.
+		for _, root := range s.workspaceRoots() {
+			if _, ok := tools.RefreshGitRepoRoot(root); ok {
+				inRepo = true
+				break
+			}
+		}
 	}
 	if allGitToolsUserDisabled() {
 		s.GitToolsAutoDisabled.Store(false)
@@ -999,7 +1080,7 @@ Rules: always take a "screenshot" first; all coordinates (x, y, x2, y2) must be 
 							Description: "Configuration for a single sub-agent",
 							Properties: map[string]types.ToolProperty{
 								"id":             {Type: "string", Description: "Unique identifier for this sub-agent"},
-								"subdirectory":   {Type: "string", Description: "Working directory path for this agent, relative to the current root. The directory must exist."},
+								"subdirectory":   {Type: "string", Description: "Working directory for this agent: relative to the current root, or an absolute path inside any allowed root (/cd). It must exist; the sub-agent is confined to it."},
 								"instructions":   {Type: "string", Description: "Task instructions for this agent"},
 								"tools":          {Type: "array", Description: "List of tool names this agent can use", Items: &types.ToolProperty{Type: "string"}},
 								"max_iterations": {Type: "number", Description: "Max iterations before the agent stops and reports a partial result. Omit to use the configured default (250); there is no upper limit, but the time limit still applies."},

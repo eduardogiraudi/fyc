@@ -83,6 +83,7 @@ func (r *aguiRunner) newThreadSession() *ChatSession {
 		Version:        base.Version,
 		Commit:         base.Commit,
 		RestrictedRoot: base.RestrictedRoot,
+		ExtraRoots:     append([]string(nil), base.ExtraRoots...),
 		AvailableTools: base.AvailableTools,
 		Headless:       true,
 	}

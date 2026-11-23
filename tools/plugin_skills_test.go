@@ -41,13 +41,13 @@ func TestInstalledPluginSkillDiscoveryAndReads(t *testing.T) {
 	if p := FindSkillPath(name, workspace); p == "" || filepath.Base(p) != "SKILL.md" {
 		t.Fatalf("skill path: %q", p)
 	}
-	if result := executeReadSkillTool(map[string]any{"name": name}, workspace); !strings.Contains(result, "Read references/rules.md") {
+	if result := executeReadSkillTool(map[string]any{"name": name}, Workspace{Primary: workspace}); !strings.Contains(result, "Read references/rules.md") {
 		t.Fatalf("skill instructions: %s", result)
 	}
-	if result := executeReadSkillTool(map[string]any{"name": name, "file": "references/rules.md"}, workspace); !strings.Contains(result, "Plugin rules") {
+	if result := executeReadSkillTool(map[string]any{"name": name, "file": "references/rules.md"}, Workspace{Primary: workspace}); !strings.Contains(result, "Plugin rules") {
 		t.Fatalf("supporting reference: %s", result)
 	}
-	if result := executeReadSkillTool(map[string]any{"name": name, "file": "../../../plugin.json"}, workspace); !strings.Contains(result, "error") {
+	if result := executeReadSkillTool(map[string]any{"name": name, "file": "../../../plugin.json"}, Workspace{Primary: workspace}); !strings.Contains(result, "error") {
 		t.Fatalf("escaped skill directory: %s", result)
 	}
 }

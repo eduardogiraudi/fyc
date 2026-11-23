@@ -185,9 +185,10 @@ func executeWebSearchTool(ctx context.Context, args map[string]any) string {
 	return result
 }
 
-// executeSkillsDiscoveryTool handles the "skills_discovery" case.
-func executeSkillsDiscoveryTool(restrictedRoot string) string {
-	skills := DiscoverSkills(restrictedRoot)
+// executeSkillsDiscoveryTool handles the "skills_discovery" case. Every allowed
+// root is scanned, so a skill living beside an extra root is found too.
+func executeSkillsDiscoveryTool(ws Workspace) string {
+	skills := DiscoverSkillsIn(ws)
 	if len(skills) == 0 {
 		return "No skills found."
 	}
@@ -203,7 +204,7 @@ func executeSkillsDiscoveryTool(restrictedRoot string) string {
 }
 
 // executeReadSkillTool handles the "read_skill" case.
-func executeReadSkillTool(args map[string]any, restrictedRoot string) string {
+func executeReadSkillTool(args map[string]any, ws Workspace) string {
 	name, ok := args["name"].(string)
 	if !ok || name == "" {
 		return "error: name argument required"
@@ -213,7 +214,7 @@ func executeReadSkillTool(args map[string]any, restrictedRoot string) string {
 		fileArg = "SKILL.md"
 	}
 
-	skillDir := findSkillDir(name, restrictedRoot)
+	skillDir := findSkillDirIn(name, ws)
 	if skillDir == "" {
 		return fmt.Sprintf("error: skill '%s' not found", name)
 	}

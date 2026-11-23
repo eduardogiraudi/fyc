@@ -291,6 +291,22 @@ func printHelp() {
 func buildSystemPrompt(today, userPreferences string, s *ChatSession) string {
 	var rules []string
 
+	// With a single root the prompt stays exactly what it always was; a session
+	// that allowed more than one root has to say so, or the model would treat
+	// every extra root as "outside the workspace".
+	roots := s.workspaceRoots()
+	if len(roots) > 1 {
+		extras := make([]string, 0, len(roots)-1)
+		for _, r := range roots[1:] {
+			extras = append(extras, "`"+r+"`")
+		}
+		rules = append(rules, "Workspace roots: relative paths resolve against `"+roots[0]+
+			"`; these additional roots are also allowed and are addressed by absolute path: "+
+			strings.Join(extras, ", ")+
+			". A path inside one of them is not outside the workspace: use its absolute path (the tools accept it) "+
+			"and never claim it cannot be read or written.")
+	}
+
 	if s.toolVisible("ls") || s.toolVisible("read") || s.toolVisible("grep") || s.toolVisible("context_snapshot") {
 		rules = append(rules, "Verify before acting: never assume file contents or structure. Use ls, read, grep, or context_snapshot first.")
 	}
@@ -392,9 +408,14 @@ Never use write on existing files.`)
 	// System Prompt) and stored as a template with ${VAR} placeholders. Only the
 	// environment-variable substitution happens here — no shell is invoked —
 	// and the tool-derived <rules> block below stays fully dynamic.
+	extraRoots := ""
+	if roots := s.workspaceRoots(); len(roots) > 1 {
+		extraRoots = strings.Join(roots[1:], ", ")
+	}
 	vars := map[string]string{
 		"FYC_TODAY":       today,
 		"FYC_CWD":         s.RestrictedRoot,
+		"FYC_ROOTS":       extraRoots,
 		"FYC_OS":          runtime.GOOS,
 		"FYC_SHELL":       config.ShellNote(runtime.GOOS),
 		"FYC_PREFERENCES": userPreferences,
@@ -406,6 +427,17 @@ Never use write on existing files.`)
 		base += "\n\n" + s.ProjectContext
 	}
 	return base
+}
+
+// hasSystemPrompt reports whether the conversation already carries the system
+// message updateSystemPrompt would rewrite.
+func hasSystemPrompt(history []types.Message) bool {
+	for _, m := range history {
+		if m.Role == "system" {
+			return true
+		}
+	}
+	return false
 }
 
 func updateSystemPrompt(s *ChatSession) {
@@ -429,12 +461,28 @@ func refreshProjectContext(s *ChatSession) {
 	if s == nil || s.RestrictedRoot == "" {
 		return
 	}
-	rendered, _ := tools.LoadProjectContext(s.RestrictedRoot)
+	rendered, _ := tools.LoadWorkspaceContext(s.workspaceRoots())
 	if rendered == s.ProjectContext {
 		return
 	}
 	s.ProjectContext = rendered
 	updateSystemPrompt(s)
+}
+
+// reloadProjectContext re-reads the AGENTS.md chain of every allowed root and
+// re-renders the system prompt unconditionally: the caller changed the root set,
+// so the old blocks describe a workspace that no longer exists.
+func (s *ChatSession) reloadProjectContext() {
+	if s == nil || s.RestrictedRoot == "" {
+		return
+	}
+	s.ProjectContext, _ = tools.LoadWorkspaceContext(s.workspaceRoots())
+}
+
+// projectContextSummary is the short "context:" line of the startup header.
+func projectContextSummary(s *ChatSession) string {
+	_, summary := tools.LoadWorkspaceContext(s.workspaceRoots())
+	return summary
 }
 
 // newSession builds and bootstraps a ChatSession without the interactive TUI.
@@ -463,8 +511,8 @@ func newSession() *ChatSession {
 	s.AvailableTools = append(s.AvailableTools, mcpTools...)
 	tools.SetGlobalSubagentTools(s.AvailableTools)
 
-	s.GlobalIgnore = tools.LoadIgnoreFiles(s.RestrictedRoot)
-	s.ProjectContext, _ = tools.LoadProjectContext(s.RestrictedRoot)
+	s.GlobalIgnore = tools.LoadWorkspaceIgnore(s.workspaceRoots())
+	s.ProjectContext, _ = tools.LoadWorkspaceContext(s.workspaceRoots())
 	s.refreshLSPToolAvailability()
 	s.refreshGitToolAvailability()
 	s.refreshWebSearchAvailability()
@@ -490,7 +538,7 @@ func buildSuggestionProvider(s *ChatSession) ui.SuggestionProvider {
 			return matches, "Files: ↑/↓ select · Tab/Enter insert · Esc dismiss (200 matches / 4096 entries max)"
 		}
 		if strings.HasPrefix(line, "/skills") {
-			skills := tools.DiscoverSkills(s.RestrictedRoot)
+			skills := tools.DiscoverSkillsIn(s.workspace())
 			query := strings.TrimSpace(strings.TrimPrefix(line, "/skills"))
 			for name, desc := range skills {
 				if query == "" || strings.Contains(strings.ToLower(name), strings.ToLower(query)) {

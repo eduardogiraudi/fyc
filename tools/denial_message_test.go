@@ -37,16 +37,16 @@ func TestDeniedToolResultsAreFailures(t *testing.T) {
 			return executeMakeDirTool(ctx, map[string]any{"path": "sub"}, dir, nil)
 		}},
 		{"copy", func() string {
-			return executeCopyTool(ctx, map[string]any{"source": "a.txt", "destination": "b.txt"}, dir, nil)
+			return executeCopyTool(ctx, map[string]any{"source": "a.txt", "destination": "b.txt"}, Workspace{Primary: dir}, nil)
 		}},
 		{"rename", func() string {
 			return executeRenameTool(ctx, map[string]any{"path": "a.txt", "new_name": "c.txt"}, dir, nil)
 		}},
 		{"move", func() string {
-			return executeMoveTool(ctx, map[string]any{"source": "a.txt", "destination": "d.txt"}, dir, nil)
+			return executeMoveTool(ctx, map[string]any{"source": "a.txt", "destination": "d.txt"}, Workspace{Primary: dir}, nil)
 		}},
 		{"sh", func() string {
-			return executeShTool(ctx, map[string]any{"command": "true"}, dir, nil)
+			return executeShTool(ctx, map[string]any{"command": "true"}, Workspace{Primary: dir}, nil)
 		}},
 	}
 

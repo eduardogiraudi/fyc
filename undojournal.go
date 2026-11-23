@@ -25,8 +25,12 @@ import (
 // by diffing the workspace against the last known state. The bytes needed to
 // restore a file are stored content-addressed the first time they are seen, so
 // identical content across turns costs nothing.
+//
+// The journal covers every root the session allowed (/cd): changes are keyed by
+// root and relative path, and a record whose root is no longer allowed is never
+// restored (it could rewrite a folder the user has just revoked).
 const (
-	undoJournalSchema = 1
+	undoJournalSchema = 2
 
 	// Limits keep a snapshot from silently copying a huge tree. A turn that
 	// exceeds them is reported as partial rather than pretended reverted.
@@ -56,6 +60,11 @@ type fileVersion struct {
 
 // fileChange is one path a turn touched.
 type fileChange struct {
+	// Root is the allowed root the path belongs to. It is empty for the records
+	// written before /cd existed (schema 1), which all belong to the journal's
+	// primary root.
+	Root string `json:"root,omitempty"`
+	// Path is relative to Root, slash-separated.
 	Path   string      `json:"path"`
 	Before fileVersion `json:"before"`
 	After  fileVersion `json:"after"`
@@ -64,11 +73,37 @@ type fileChange struct {
 	Uncaptured bool `json:"uncaptured,omitempty"`
 }
 
+// rootOr is the root the change belongs to.
+func (c fileChange) rootOr(primary string) string {
+	if c.Root == "" {
+		return primary
+	}
+	return c.Root
+}
+
+// displayPath is what the user (and the conflict prompt) sees: the relative
+// name inside the primary root, the root-qualified one everywhere else.
+func (c fileChange) displayPath(primary string) string {
+	root := c.rootOr(primary)
+	if root == "" || root == primary {
+		return c.Path
+	}
+	return filepath.Join(root, filepath.FromSlash(c.Path))
+}
+
 // undoJournal is the per-session record. Turns are indexed like the history's
 // turns; a missing record means the turn changed nothing outside the workspace.
 type undoJournal struct {
-	mu      sync.Mutex
-	root    string
+	mu sync.Mutex
+	// root is the primary workspace root. It identifies the journal together
+	// with the session id.
+	root string
+	// roots are all the roots the journal covers, primary first. They are kept
+	// in sync with the session's allowed roots (see SetRoots).
+	roots []string
+	// ig is the ignore manager of every covered root. When it is nil the manager
+	// handed to Collect/Sync is used.
+	ig      *tools.IgnoreManager
 	session string
 	dir     string
 	// base is the history index of turns[0]: the cap drops the oldest records,
@@ -76,11 +111,13 @@ type undoJournal struct {
 	base     int
 	manifest map[string]fileVersion
 	turns    [][]fileChange
-	allow    map[string]bool // paths a turn may restore, empty = everything under root
 	// budget tracks the bytes stored for the turn in progress.
 	budget  int
 	partial bool
 }
+
+// changeKey identifies one path across every allowed root.
+func changeKey(root, rel string) string { return root + "\x00" + rel }
 
 // undoJournalFile is the on-disk envelope.
 type undoJournalFile struct {
@@ -95,11 +132,60 @@ func undoJournalDir(workspaceDir, sessionID string) string {
 
 // newUndoJournal prepares (or loads) the journal of a session.
 func newUndoJournal(root, session, dir string) *undoJournal {
-	j := &undoJournal{root: root, session: session, dir: dir, manifest: map[string]fileVersion{}}
+	j := &undoJournal{root: root, roots: []string{root}, session: session, dir: dir, manifest: map[string]fileVersion{}}
 	if err := j.load(); err != nil {
 		store.Notice("undo journal: %v", err)
 	}
 	return j
+}
+
+// SetRoots installs the workspace the journal must cover: every additional root
+// allowed with /cd, and the ignore rules that police them.
+func (j *undoJournal) SetRoots(roots []string, ig *tools.IgnoreManager) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.roots = append([]string(nil), roots...)
+	if len(j.roots) == 0 && j.root != "" {
+		j.roots = []string{j.root}
+	}
+	j.ig = ig
+}
+
+// walkRoots is every root the journal covers.
+func (j *undoJournal) walkRoots() []string {
+	if len(j.roots) > 0 {
+		return j.roots
+	}
+	if j.root != "" {
+		return []string{j.root}
+	}
+	return nil
+}
+
+// ignoreManager prefers the manager installed with the root set (it knows every
+// root) and falls back to the one the caller passed.
+func (j *undoJournal) ignoreManager(ig *tools.IgnoreManager) *tools.IgnoreManager {
+	if j.ig != nil {
+		return j.ig
+	}
+	return ig
+}
+
+// coversRoot reports whether root is still an allowed root of this journal.
+func (j *undoJournal) coversRoot(root string) bool {
+	want, err := store.ResolvePath(root)
+	if err != nil {
+		return false
+	}
+	for _, r := range j.walkRoots() {
+		if got, rerr := store.ResolvePath(r); rerr == nil && got == want {
+			return true
+		}
+	}
+	return false
 }
 
 // load restores the turns of an earlier process, so /undo still reverts files
@@ -118,6 +204,16 @@ func (j *undoJournal) load() error {
 	}
 	j.turns = doc.Turns
 	j.base = doc.Base
+	if doc.Schema < 2 {
+		// Schema 1 knew a single root: every record belongs to the primary one.
+		for _, turn := range j.turns {
+			for i := range turn {
+				if turn[i].Root == "" {
+					turn[i].Root = j.root
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -174,34 +270,44 @@ func (j *undoJournal) currentTurn() int { return j.base + len(j.turns) - 1 }
 // Sync brings the manifest up to date with the disk and stores the bytes of the
 // files that changed since the last sync. It runs at the start of a turn, so the
 // pre-image of everything a turn is about to change is already in the store.
-// root is the caller's workspace (a sub-agent's subdirectory): the journal keeps
-// covering the whole session root, which is a superset of it.
-func (j *undoJournal) Sync(root string, ig *tools.IgnoreManager) {
+// root is the caller's workspace (a sub-agent's subdirectory): the journal always
+// covers every allowed root, which is a superset of it.
+func (j *undoJournal) Sync(_ string, ig *tools.IgnoreManager) {
 	if j == nil {
 		return
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.walk(ig, func(rel string, abs string, info fs.FileInfo) {
-		if v, ok := j.manifest[rel]; ok && v.size == info.Size() && v.mtime == info.ModTime().UnixNano() {
-			return
+	im := j.ignoreManager(ig)
+	seen := map[string]bool{}
+	for _, root := range j.walkRoots() {
+		j.walkRoot(root, im, func(root, rel, abs string, info fs.FileInfo) {
+			key := changeKey(root, rel)
+			seen[key] = true
+			if v, ok := j.manifest[key]; ok && v.size == info.Size() && v.mtime == info.ModTime().UnixNano() {
+				return
+			}
+			ver, err := j.capture(rel, abs, info)
+			ver.unrecoverable = err != nil
+			j.manifest[key] = ver
+		})
+	}
+	// An entry leaves the manifest only when its file is really gone. A file the
+	// walk did not visit keeps its pre-image: it can be missing from the walk
+	// without being deleted (a new ignore rule written during the same turn, the
+	// walk cap, an unreadable root), and dropping it would turn the next change
+	// into a "creation" — which /undo then removes instead of restoring.
+	for key := range j.manifest {
+		if seen[key] || manifestFileExists(key) {
+			continue
 		}
-		ver, err := j.capture(rel, abs, info)
-		ver.unrecoverable = err != nil
-		j.manifest[rel] = ver
-	})
-	// Files that disappeared are dropped from the manifest: the next Collect does
-	// not see them either, so nothing is claimed about them.
-	for rel := range j.manifest {
-		if _, err := os.Lstat(filepath.Join(j.root, filepath.FromSlash(rel))); err != nil {
-			delete(j.manifest, rel)
-		}
+		delete(j.manifest, key)
 	}
 }
 
 // Collect attributes every change since the last Sync/Collect to the turn in
 // progress and updates the manifest to the new state.
-func (j *undoJournal) Collect(root string, ig *tools.IgnoreManager) {
+func (j *undoJournal) Collect(_ string, ig *tools.IgnoreManager) {
 	if j == nil {
 		return
 	}
@@ -211,33 +317,69 @@ func (j *undoJournal) Collect(root string, ig *tools.IgnoreManager) {
 		return
 	}
 	turn := j.currentTurn()
+	im := j.ignoreManager(ig)
 	seen := map[string]bool{}
-	j.walk(ig, func(rel string, abs string, info fs.FileInfo) {
-		seen[rel] = true
-		prev, known := j.manifest[rel]
-		if known && prev.size == info.Size() && prev.mtime == info.ModTime().UnixNano() {
-			return
-		}
-		after, err := j.capture(rel, abs, info)
-		after.unrecoverable = err != nil
-		before := prev
-		if !known {
-			before = fileVersion{}
-		}
-		uncaptured := err != nil || prev.unrecoverable
-		j.record(turn, fileChange{Path: rel, Before: before, After: after, Uncaptured: uncaptured})
-		j.manifest[rel] = after
-	})
-	for rel, prev := range j.manifest {
-		if seen[rel] {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(j.root, filepath.FromSlash(rel))); err == nil {
-			continue
-		}
-		delete(j.manifest, rel)
-		j.record(turn, fileChange{Path: rel, Before: prev, After: fileVersion{}, Uncaptured: prev.unrecoverable})
+	for _, root := range j.walkRoots() {
+		j.walkRoot(root, im, func(root, rel, abs string, info fs.FileInfo) {
+			key := changeKey(root, rel)
+			seen[key] = true
+			prev, known := j.manifest[key]
+			if known && prev.size == info.Size() && prev.mtime == info.ModTime().UnixNano() {
+				return
+			}
+			after, err := j.capture(rel, abs, info)
+			after.unrecoverable = err != nil
+			before := prev
+			if !known {
+				before = fileVersion{}
+			}
+			uncaptured := err != nil || prev.unrecoverable
+			j.record(turn, fileChange{Root: root, Path: rel, Before: before, After: after, Uncaptured: uncaptured})
+			j.manifest[key] = after
+		})
 	}
+	for key, prev := range j.manifest {
+		if seen[key] {
+			continue
+		}
+		// Only a path that is really gone describes a deletion. A file the walk
+		// did not visit may still be there (a new ignore rule, the walk cap, an
+		// unreadable root): recording it as deleted would make /undo write its
+		// pre-turn bytes back over it, so its entry stays in the manifest.
+		if manifestFileExists(key) {
+			continue
+		}
+		delete(j.manifest, key)
+		root, rel := splitChangeKey(key)
+		change := fileChange{
+			Root:       root,
+			Path:       rel,
+			Before:     prev,
+			After:      fileVersion{},
+			Uncaptured: prev.unrecoverable,
+		}
+		j.record(turn, change)
+	}
+}
+
+// manifestFileExists reports whether the file a manifest key names is still on
+// disk. It is what separates "the turn deleted it" from "the walk did not visit
+// it": only the first one describes a deletion.
+func manifestFileExists(key string) bool {
+	root, rel := splitChangeKey(key)
+	if root == "" || rel == "" {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// splitChangeKey separates a manifest key back into root and relative path.
+func splitChangeKey(key string) (root, rel string) {
+	if i := strings.IndexByte(key, 0); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return "", key
 }
 
 // record stores one change of the turn, skipping a path already recorded (the
@@ -248,7 +390,8 @@ func (j *undoJournal) record(turn int, change fileChange) {
 		return
 	}
 	for k := range j.turns[i] {
-		if j.turns[i][k].Path == change.Path {
+		existing := j.turns[i][k]
+		if existing.Path == change.Path && existing.rootOr(j.root) == change.rootOr(j.root) {
 			// Later changes of the same path only move the expected end state.
 			j.turns[i][k].After = change.After
 			return
@@ -257,14 +400,13 @@ func (j *undoJournal) record(turn int, change fileChange) {
 	j.turns[i] = append(j.turns[i], change)
 }
 
-// walk visits every regular file of the workspace the journal covers: symlinks,
+// walk visits every regular file of one root the journal covers: symlinks,
 // ignored paths, the .git directory and files above the per-file limit are left
 // out (an ignored artifact is not a model edit worth reverting).
-func (j *undoJournal) walk(ig *tools.IgnoreManager, visit func(rel, abs string, info fs.FileInfo)) {
+func (j *undoJournal) walkRoot(root string, ig *tools.IgnoreManager, visit func(root, rel, abs string, info fs.FileInfo)) {
 	// WalkDir does not follow the root itself, so a workspace opened through a
 	// symlink would hand back nothing but the link: every turn would look like it
 	// changed no files at all.
-	root := j.root
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
@@ -301,7 +443,7 @@ func (j *undoJournal) walk(ig *tools.IgnoreManager, visit func(rel, abs string, 
 		if err != nil || !relInside(rel) {
 			return nil
 		}
-		visit(filepath.ToSlash(rel), path, info)
+		visit(root, filepath.ToSlash(rel), path, info)
 		return nil
 	})
 	if err != nil {
@@ -386,37 +528,46 @@ func (j *undoJournal) revertTurn(n int, decide func(string) rewindDecision) undo
 	// edited may open a prompt, and no lock may be held across one.
 	j.mu.Lock()
 	changes := append([]fileChange(nil), j.turnAt(n)...)
+	primary := j.root
 	j.mu.Unlock()
 
 	for _, change := range changes {
 		if change.Uncaptured {
-			report.Skipped = append(report.Skipped, change.Path)
+			report.Skipped = append(report.Skipped, change.displayPath(primary))
 			continue
 		}
 		if sameContentVersions(change.Before, change.After) {
 			continue
 		}
-		abs := filepath.Join(j.root, filepath.FromSlash(change.Path))
+		root := change.rootOr(primary)
+		abs := filepath.Join(root, filepath.FromSlash(change.Path))
 		if decide != nil && !matchesVersion(abs, change.After) {
-			if decide(change.Path) == rewindKeep {
-				report.Kept = append(report.Kept, change.Path)
+			if decide(change.displayPath(primary)) == rewindKeep {
+				report.Kept = append(report.Kept, change.displayPath(primary))
 				continue
 			}
 		}
 		if err := j.restore(change); err != nil {
-			report.Failed = append(report.Failed, change.Path)
+			report.Failed = append(report.Failed, change.displayPath(primary))
 			continue
 		}
-		report.Restored = append(report.Restored, change.Path)
+		report.Restored = append(report.Restored, change.displayPath(primary))
 	}
 	return report
 }
 
 // restore writes the before version of a change back to the disk.
 func (j *undoJournal) restore(change fileChange) error {
-	abs := filepath.Join(j.root, filepath.FromSlash(change.Path))
-	if !insideRoot(j.root, abs) {
-		return fmt.Errorf("%s is outside the workspace", change.Path)
+	root := change.rootOr(j.root)
+	// A record whose root is no longer allowed is never written: the user just
+	// revoked it, and restoring into it would reach a folder the session cannot
+	// even read.
+	if !j.coversRoot(root) {
+		return fmt.Errorf("%s is not an allowed root any more", root)
+	}
+	abs := filepath.Join(root, filepath.FromSlash(change.Path))
+	if !insideRoot(root, abs) {
+		return fmt.Errorf("%s is outside its workspace root", change.Path)
 	}
 	if !change.Before.Exists {
 		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
@@ -570,13 +721,15 @@ func (j *undoJournal) conflicts(from int) []string {
 	var out []string
 	for turn := from; turn < j.base+len(j.turns); turn++ {
 		for _, change := range j.turnAt(turn) {
-			if change.Uncaptured || seen[change.Path] || sameContentVersions(change.Before, change.After) {
+			display := change.displayPath(j.root)
+			if change.Uncaptured || seen[display] || sameContentVersions(change.Before, change.After) {
 				continue
 			}
-			seen[change.Path] = true
-			abs := filepath.Join(j.root, filepath.FromSlash(change.Path))
+			seen[display] = true
+			root := change.rootOr(j.root)
+			abs := filepath.Join(root, filepath.FromSlash(change.Path))
 			if !matchesVersion(abs, change.After) {
-				out = append(out, change.Path)
+				out = append(out, display)
 			}
 		}
 	}

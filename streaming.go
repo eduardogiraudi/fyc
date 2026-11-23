@@ -279,7 +279,7 @@ func handleToolCallsWithSink(s *ChatSession, sink types.OutputSink, toolCalls []
 		// becomes a tool-bound AG-UI interrupt (level 2, reason "tool_call").
 		callCtx := agui.WithToolCall(runCtx, callID, tc.Function.Name)
 		sink.StartSpinner(spinnerLabel)
-		res := tools.ExecuteToolWithSpinner(callCtx, tc, s.GlobalIgnore, s.RestrictedRoot, s.MCPManager)
+		res := tools.ExecuteToolWithSpinner(callCtx, tc, s.GlobalIgnore, s.workspace(), s.MCPManager)
 		sink.StopSpinner()
 
 		// Clean up subagent panel after spawn_subagents completes
@@ -519,7 +519,6 @@ func responseTruncated(reason string) bool {
 	return false
 }
 
-// tokenStatsLine returns the formatted string with token stats.
 // tokenStatsLine returns the formatted string with token stats.
 // "prompt" keeps the provider's wire semantics (Anthropic counts only the
 // uncached tail there); "context" is the whole prompt, cached part included, and

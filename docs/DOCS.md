@@ -7,7 +7,7 @@ The Go module and default binary name are both `fuckyourcli`; application-owned 
 ## Contents
 
 - Setup: [Requirements](#requirements) · [Build](#build) · [Install](#install) · [Configuration](#configuration) · [OpenAI Codex (OAuth)](#openai-codex-oauth)
-- Using it: [Usage](#usage) · [Rewinding a turn](#rewinding-a-turn) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
+- Using it: [Usage](#usage) · [Rewinding a turn](#rewinding-a-turn) · [Multiple workspace roots](#multiple-workspace-roots-cd) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
 - Customisation: [Tool hooks](#tool-hooks-prepost) · [Status bar hook](#status-bar-hook) · [System prompt](#system-prompt-persona) · [Project instructions (AGENTS.md)](#project-instructions-agentsmd)
 - Tools & integrations: [Built-in tools](#built-in-tools) · [LSP servers](#lsp-servers) · [Git tools](#git-tools) · [MCP servers](#mcp-servers) · [AG-UI backend](#ag-ui-backend)
 - Internals: [Runtime files](#runtime-files) · [Architecture](#architecture) · [Security model](#security-model) ([Windows sandbox](#windows-sandbox)) · [Development](#development)
@@ -329,7 +329,8 @@ Inside the chat:
 | Mouse wheel, `PgUp` / `PgDn`, `Shift+↑` / `Shift+↓`, `Ctrl+Home`, `Ctrl+End` | Scroll the transcript in the alt-screen TUI (the default); `Ctrl+End` returns to the live output. Outside input popups, the wheel scrolls the transcript instead of the input history. No effect in the inline REPL (`alt_screen: false`), where the terminal scrolls. |
 | Left-drag, release | Select transcript rows — or the typed text, when the drag starts on the input bar — in alt-screen mode and copy them to the clipboard on release (`Shift`+drag selects with the terminal instead). |
 | `/airplane [on\|off]` | Toggle `web_search` and web-dependent commands. Equivalent to disabling/enabling `web_search` in tool settings. |
-| `/undo [n]` | Rewind to before a turn: discard that turn and every later one, and put the conversation, the transcript, the files it changed and the anchor cache back to that boundary. See [Rewinding a turn](#rewinding-a-turn). |
+| `/undo [n]` | Rewind to before a turn: discard that turn and every later one, and put the conversation, the transcript, the files it changed (in every allowed root) and the anchor cache back to that boundary. See [Rewinding a turn](#rewinding-a-turn). |
+| `/cd [path\|list\|remove <path>\|clear\|save [name]]` | Manage the workspace roots the session may touch: add a folder (directory picker or typed path), remove one, or save the whole set so a later run started in any of those folders can offer it again. Session-only unless saved. See [Multiple workspace roots](#multiple-workspace-roots-cd). |
 | `/clear` | Clear chat context while keeping system messages. |
 | `/retry` | Repeat the last failed provider request without rerunning completed tools. |
 | `/delay <seconds>` | Persistently set delay before model requests. |
@@ -420,6 +421,69 @@ Limits keep a snapshot from copying a large tree: files above 8 MiB, more than
 lists them instead of pretending they were reverted. Ignored files, `~/.` paths
 and anything outside the workspace are out of scope, as are the changes a
 detached `sh` process (`persistence: true`) makes after the call returned.
+
+## Multiple workspace roots (/cd)
+
+A session normally has exactly one root: the folder `fuckyourcli` was started
+in. `/cd` adds more, so a task can span a library, a shared checkout or a second
+project without leaving the session.
+
+```text
+┌ Workspace roots (/cd) ─────────────────────────────────────────┐
+│ Allowed roots (2):                                             │
+│   /home/me/api (primary, relative paths resolve here)          │
+│   /home/me/shared-lib (absolute paths only)                    │
+│ > Add a folder…                                                │
+│   Remove a folder…                                             │
+│   Save this set for next time…                                 │
+│   Done                                                         │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- **Adding** opens a directory picker (Enter opens a folder, `space` selects the
+  one you are in, `h` goes up, `esc` cancels) and then asks whether the set is
+  **only for this session** or should be **saved**. You can skip the picker with
+  `/cd /path/to/folder`.
+- **The primary root never moves.** Relative paths keep resolving against the
+  folder fyc was started in and `sh` runs there; the extra roots are addressed
+  by absolute path only. That is what the system prompt tells the model, and the
+  startup header lists them under `roots:`.
+- **Everything follows the root set**: the file tools, `grep`,
+  `context_snapshot`, `@file` attachments (the suggestion list browses the
+  primary root, but a typed absolute path resolves in any root), the `sh`
+  sandbox (every root is bound
+  read-write and every `.git` stays masked), the ignore rules (the `.fycignore`
+  and `.gitignore` of each root, scoped to its own tree), the git tools, the LSP
+  tools, sub-agents and `/undo`.
+- **`AGENTS.md`**: each root gets its own chain, injected as a separate
+  `<project_context>` block labelled with the root it belongs to (`# /path`), so
+  the model always knows which project an instruction comes from. The byte
+  budget applies per root.
+- **Sub-agents** may be spawned in any allowed root: `subdirectory` is relative
+  to the primary root, or an absolute path inside any allowed root. The sub-agent
+  is then confined to that folder, exactly like a single-root session.
+- **Git tools**: a read-only call without a path answers for every allowed root
+  that is a repository, each section prefixed by its root (`## /path`); a call
+  that names a path runs in the root that owns it, and mutating calls use that
+  same root (the primary one when no path is given).
+- **`/undo`** covers every root: the journal is keyed by root and relative path,
+  so a turn that wrote in an extra root is reverted there too. A record whose
+  root is no longer allowed is never restored.
+- **Saving**: the set is stored as `workspaces` in `config.json` (name, roots,
+  last use). Starting fyc **inside any of those folders** asks whether to load
+  the set again, showing each candidate with the folders it would allow. Answer
+  "Start with only this folder" to ignore it, or remove the entry with
+  `/cd`… (saving again replaces it). Closing the question itself (`q`, `esc` or
+  `Ctrl+C`) quits, exactly like the chat picker on startup.
+- **Refused folders**: the filesystem root, your whole home directory and fyc's
+  own configuration directory — and anything that **contains** them (`/home`,
+  `/Users`, `~/.config`), because a parent grants the child just as well and
+  would expose `~/.ssh` or the API keys in `auth.json`. A folder that contains
+  an *allowed root* is a different case and is accepted with a warning, since it
+  grants strictly more than what was already there.
+- **Not covered**: `fuckyourcli serve` (the AG-UI backend), `/init` and the
+  `@file` suggestions stay on the primary root; `/sessions` keeps keying the
+  saved chats by it.
 
 ## Reasoning / thinking
 
@@ -529,7 +593,7 @@ Edit it from the config UI under **CLI Settings → System Prompt (persona)**, o
 Placeholders use the `${VAR}` form:
 
 - **Only environment variables are substituted — no shell invoked.** The value of `VAR` is written verbatim and the substituted text is never re-processed.
-- Built-in variables provided by the CLI: `${FYC_TODAY}` (formatted current date), `${FYC_CWD}` (working directory), `${FYC_OS}`, `${FYC_SHELL}` (the OS-specific shell note — `cmd.exe`/PowerShell/Schannel on Windows, the tmpfs sandbox elsewhere) and `${FYC_PREFERENCES}` (the contents of `PREFERENCES.txt`).
+- Built-in variables provided by the CLI: `${FYC_TODAY}` (formatted current date), `${FYC_CWD}` (working directory), `${FYC_ROOTS}` (the additional workspace roots allowed with `/cd`, comma-separated; empty in a normal single-root session), `${FYC_OS}`, `${FYC_SHELL}` (the OS-specific shell note — `cmd.exe`/PowerShell/Schannel on Windows, the tmpfs sandbox elsewhere) and `${FYC_PREFERENCES}` (the contents of `PREFERENCES.txt`).
 - Any other `${VAR}` is read from the process environment; **if the variable is unset the placeholder becomes an empty string**.
 - **This template never reads `auth.json`.** The persona lookup is the process environment only; the secret store is deliberately kept out of it, so a `${VAR}` here can never pull a credential out of `auth.json`.
 - Example: `You are a graphic designer. Today is ${FYC_TODAY}.`
@@ -661,7 +725,7 @@ A leading `~` in `search_paths` and `binaries` is expanded to the user home. The
 
 ### Execution model
 
-- `git` is invoked directly with an argv (no shell), from the workspace root, with a sanitized environment: `GIT_TERMINAL_PROMPT=0` (never blocks asking for credentials), no pager, no editor (`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=:`), `GIT_MERGE_AUTOEDIT=no`, `LC_ALL=C`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` stripped so the parent environment cannot redirect git elsewhere.
+- With several allowed roots, a read-only git call without a path answers for each root that is a repository (sections prefixed by `## /path`); a call that names a path, and every mutating call, runs in the root that owns it (the primary root when no path is given). `git` is invoked directly with an argv (no shell), from that root, with a sanitized environment: `GIT_TERMINAL_PROMPT=0` (never blocks asking for credentials), no pager, no editor (`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=:`), `GIT_MERGE_AUTOEDIT=no`, `LC_ALL=C`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` stripped so the parent environment cannot redirect git elsewhere.
 - Timeouts: 30 s for local operations, 5 minutes for network ones. Output is capped (200 KB / 2000 lines) and credentials are redacted (URL userinfo, `token=`/`password=` pairs, `Authorization` headers).
 - Paths supplied by the model must resolve inside the workspace (traversal, absolute paths outside it and `.git` internals are rejected) and are always passed after `--`; revisions, branch names and `stash@{n}` references are validated against a conservative character set, so an argument can never be mistaken for an option.
 - Commit messages are piped through stdin (`git commit --file -`): no shell, no temporary files.
@@ -695,14 +759,14 @@ Configured MCP servers can be enabled/disabled from the config UI. MCP resource 
 | `<config dir>/.gitignore` · `.fycignore` | Auto-created (only when absent) ignore files listing `auth.json` and the `.bak` copies, so a backup of the configuration directory never commits a secret. |
 | `<config dir>/PREFERENCES.txt` | Global user preferences loaded into the system prompt. |
 | `<config dir>/SYSTEM_PROMPT.txt` | User-editable base system prompt (persona) with `${VAR}` placeholders. |
-| `<config dir>/skills/`, `~/.agents/skills/`, `~/.claude/skills/`, `[root]/.claude/skills/`, `[root]/.fyc/skills/`, `[root]/.agents/skills/` | Installed skills. |
+| `<config dir>/skills/`, `~/.agents/skills/`, `~/.claude/skills/`, `[root]/.claude/skills/`, `[root]/.fyc/skills/`, `[root]/.agents/skills/` | Installed skills. `[root]` is every allowed root, the primary one first. |
 | `<config dir>/models.json` | The models.dev catalog. `fuckyourcli models update` overwrites the installed copy; `./update_catalog.sh` refreshes the bundled `models/catalog.json` for releases. The installers copy the bundled catalog here. Missing/empty is fine: `/reasoning` simply shows no catalog line. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/codex-version.json` | Stable upstream Codex compatibility version and last successful check; uses the platform cache directory (`FYC_CACHE_DIR` override), with atomic writes and `.bak` recovery. |
 | `~/.fyc_history` | Prompt history, capped at the most recent 500 entries with consecutive duplicates collapsed. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/index.json` | Per-workspace session index: one entry per chat (id, title, timestamps, message count). |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/sessions/<id>.json` | One versioned file per chat session; the most recent 50 are kept. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/blobs/<sha256>` | Content-addressed image payloads referenced by messages (garbage-collected when unreferenced). |
-| `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/undo/<id>/journal.json` | The undo journal of a session: what each turn changed on disk, so `/undo` can put the files back (removed with the session). |
+| `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/undo/<id>/journal.json` | The undo journal of a session: what each turn changed on disk, in every allowed root (each record carries its root), so `/undo` can put the files back (removed with the session). |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/undo/<id>/blobs/<sha256>` | Content-addressed pre-images referenced by the undo journal. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/chat.json` | Legacy single-file chat history: migrated into `sessions/` on first read, then renamed `chat.json.migrated`. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/logs/<session-id>/events.jsonl` | One diagnostic stream per conversation, shared by its main agent, sub-agents and compaction requests. Resuming appends to the same stream. |
@@ -845,15 +909,15 @@ curl -N http://127.0.0.1:8787/ \
 
 `fuckyourcli` is designed to reduce accidental damage while still allowing useful automation:
 
-- Built-in file tools validate paths against the startup working directory.
-- Traversal outside the restricted root is rejected.
+- Built-in file tools validate paths against the startup working directory and, when `/cd` added more, against every allowed root. Relative paths always resolve against the startup directory: an extra root is reachable by absolute path only.
+- Traversal outside the allowed roots is rejected. The filesystem root, the whole home directory, fyc's own configuration directory and any folder that contains them (`/home`, `/Users`, `~/.config`) are refused as extra roots.
 - Built-in reads/searches/edits respect scoped `.fycignore` and `.gitignore` rules. A `.fycignore` file, even empty, replaces all applicable `.gitignore` rules within its directory and descendants, whether or not a root `.fycignore` exists; outside that subtree, git rules still apply. Nested fyc exclusions remain cumulative. Scans can traverse git-ignored directories to reach a nested fyc override without exposing ignored files in neighbouring branches. Sub-agents retain the parent's scopes and honour local overrides. `.dockerignore` and `.ignore` are not interpreted. `.git` and the `.gitignore`/`.fycignore` rule files themselves remain blocked.
 - Tool availability is explicit and persisted in `tool_states`; disabled tools are not sent to the model.
 - LSP tools are additionally hidden at runtime unless compatible language servers are discovered for the workspace.
 - Git tools run `git` directly with an argv (never through a shell), a sanitized non-interactive environment (`GIT_TERMINAL_PROMPT=0`, no editor, no pager), a hard timeout, credential redaction on all output, and validation of every path/revision supplied by the model (workspace-bounded, `.git` internals unreachable).
 - **Existing-file edits should use anchored reads and anchored diffs when those tools are enabled.** Unlike string replacement, which is prone to ambiguity (multiple occurrences) and fragility (slight context shifts, whitespace discrepancies, or padding issues), anchors provide a unique identifier for each line. They eliminate the risk of failure due to micro-inaccuracies in text reproduction or indentation changes, and they stay valid even when unrelated lines shift. Consequently, edits don't rely on line numbers or exact-text matching, and the model cites a short anchor instead of reproducing the surrounding text (fewer tokens); the mechanism also refuses edits that target lines modified externally since the last read, reducing data corruption risk. Inspired by [Hash Anchored Edits](https://dirac.run/posts/hash-anchors-myers-diff-single-token).
 - File changes are previewed and require approval unless auto mode is enabled. Approval prompts offer **See changes** for edits and commits (diff viewer) and **See details** for `sh` and the git tier prompts: a scrollable pane with the full command (never cut off by the terminal) plus the sandbox envelope or the exact `git` invocation being approved.
-- Shell commands run from the restricted root with filtered environment variables.
+- Shell commands run from the restricted root with filtered environment variables; every allowed root is bind-mounted read-write and every `.git` (of every root) is masked.
 - The sandboxed `sh` injects `GOFLAGS=-buildvcs=false` automatically — the sandbox masks `.git`, so Go's VCS stamping would otherwise fail — but only when the system Go is 1.18 or newer; it is skipped for older Go (which has no such flag).
 - Values loaded from the project `.env` are redacted from tool output.
 - `web_search` blocks non-public/metadata destinations by default in both its DNS-pinned HTTP path and the browser's validating proxy, including redirect hops and subresources. Only trusted local-development users should opt in to `crawl.allow_private_networks`. Browser web security/site isolation remain enabled; Chromium sandboxing is enabled except for Linux root or the explicit `crawl.disable_sandbox` container override. The browser remains outside the `sh` sandbox. HTTP research stays available without a browser.

@@ -168,6 +168,12 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 		return true, ""
 	}
 
+	// Handle /cd command: the roots the session is allowed to touch.
+	if input == "/cd" || strings.HasPrefix(input, "/cd ") {
+		handleCDCommand(s, input)
+		return true, ""
+	}
+
 	// Handle /clear command
 	if input == "/clear" || strings.HasPrefix(input, "/clear ") {
 		var filtered []types.Message
@@ -572,7 +578,7 @@ func handleSlashCommand(input string, s *ChatSession) (bool, string) {
 			return true, ""
 		}
 		skillName := parts[0]
-		skillPath := tools.FindSkillPath(skillName, s.RestrictedRoot)
+		skillPath := tools.FindSkillPathIn(s.workspace(), skillName)
 		if skillPath == "" {
 			sink.WriteText(ui.InfoStyle.Render("Unknown skill: " + skillName))
 			sink.WriteNewline()

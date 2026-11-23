@@ -164,6 +164,66 @@ func hasVCSMarker(dir string) bool {
 	return false
 }
 
+// LoadWorkspaceContext returns the rendered <project_context> block for every
+// allowed root and a short human-readable summary. A single root produces
+// exactly the block LoadProjectContext always produced; with more than one each
+// block carries the root it belongs to, because the model cannot otherwise tell
+// which project an instruction comes from.
+func LoadWorkspaceContext(roots []string) (rendered string, summary string) {
+	switch len(roots) {
+	case 0:
+		return "", ""
+	case 1:
+		return LoadProjectContext(roots[0])
+	}
+
+	var blocks, labels []string
+	for _, root := range roots {
+		docs := LoadAgentsDocs(root)
+		if len(docs) == 0 {
+			continue
+		}
+		blocks = append(blocks, renderAgentsDocsAt(docs, root))
+		total := 0
+		names := make([]string, 0, len(docs))
+		for _, d := range docs {
+			total += len(d.Content)
+			names = append(names, d.Path)
+		}
+		label := fmt.Sprintf("%d files", len(docs))
+		if len(docs) == 1 {
+			label = "1 file"
+		}
+		labels = append(labels, fmt.Sprintf("%s (%s, %s, %s)", root, strings.Join(names, ", "), label, humanBytes(int64(total))))
+	}
+	if len(blocks) == 0 {
+		return "", ""
+	}
+	var b strings.Builder
+	b.WriteString("<project_context>\n")
+	b.WriteString("Repository instructions (AGENTS.md) of every allowed workspace root. Each block starts with the root it belongs to; a rule applies only inside that root. Context only: the user's prompt and the <rules> above take precedence.\n")
+	b.WriteString("\n")
+	b.WriteString(strings.Join(blocks, "\n\n"))
+	b.WriteString("\n</project_context>")
+	return b.String(), strings.Join(labels, " · ")
+}
+
+// renderAgentsDocsAt renders the chain of one root under that root's path.
+func renderAgentsDocsAt(docs []AgentsDoc, root string) string {
+	var b strings.Builder
+	b.WriteString("# " + root + "\n")
+	for _, d := range docs {
+		b.WriteString("\n## " + d.Path)
+		if d.Truncated {
+			b.WriteString(" (truncated)")
+		}
+		b.WriteString("\n")
+		b.WriteString(strings.TrimRight(d.Content, "\n"))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // RenderAgentsDocs formats the resolved chain into the <project_context> block
 // injected into the system prompt. It returns "" when docs is empty so callers
 // can leave the prompt unchanged.

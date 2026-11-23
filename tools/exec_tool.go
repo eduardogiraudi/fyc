@@ -126,9 +126,11 @@ func leadingInt(s string) (int, bool) {
 	return n, err == nil
 }
 
-// executeShTool handles the "sh" case.
-// Usage: result := executeShTool(ctx, args, restrictedRoot, globalIgnore)
-func executeShTool(ctx context.Context, args map[string]any, restrictedRoot string, globalIgnore *IgnoreManager) string {
+// executeShTool handles the "sh" case. The command runs in the primary root and
+// every allowed root is bound read-write, so a shell command can build across
+// all of them (and their .git directories stay masked).
+// Usage: result := executeShTool(ctx, args, ws, globalIgnore)
+func executeShTool(ctx context.Context, args map[string]any, ws Workspace, globalIgnore *IgnoreManager) string {
 	cmd, ok := args["command"].(string)
 	if !ok {
 		return "error: command argument required"
@@ -140,9 +142,10 @@ func executeShTool(ctx context.Context, args map[string]any, restrictedRoot stri
 	}
 
 	// No process or timeout starts until the sandbox envelope is approved.
-	envPath := filepath.Join(restrictedRoot, ".env")
+	envPath := filepath.Join(ws.Primary, ".env")
 
-	allowedRW, allowedRO := standardAllowedDirs(restrictedRoot)
+	allowedRW, allowedRO := standardAllowedDirs(ws.Primary)
+	allowedRW = append(allowedRW, ws.Extra...)
 
 	denyEnvKeys := []string{
 		"AWS_SECRET_ACCESS_KEY",
@@ -174,7 +177,7 @@ func executeShTool(ctx context.Context, args map[string]any, restrictedRoot stri
 		sort.Strings(injectedKeys)
 	}
 
-	details := execApprovalDetails(cmd, persistence, restrictedRoot, allowedRW, allowedRO, injectedKeys, denyEnvKeys, timeout)
+	details := execApprovalDetails(cmd, persistence, ws.Primary, allowedRW, allowedRO, injectedKeys, denyEnvKeys, timeout)
 
 	allowed, suggestion := askExecPermission(ctx, cmd, details)
 	if !allowed {
@@ -214,7 +217,8 @@ func executeShTool(ctx context.Context, args map[string]any, restrictedRoot stri
 		"npm_config_store_dir="+home+"/.local/share/pnpm/store",
 	)
 	scfg := sandboxConfig{
-		RestrictedRoot: restrictedRoot,
+		RestrictedRoot: ws.Primary,
+		Roots:          ws.Roots(),
 		AllowedRW:      allowedRW,
 		AllowedRO:      allowedRO,
 		DenyEnv:        denyEnvKeys,

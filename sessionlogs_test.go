@@ -155,7 +155,7 @@ func TestCompactionAndParallelSubagentsShareConversationLogs(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			result := tools.RunSubagent(ctx, tools.SubagentConfig{ID: id, Subdirectory: ".", Instructions: "complete task", MaxIterations: 1}, nil, s.RestrictedRoot, nil, nil)
+			result := tools.RunSubagent(ctx, tools.SubagentConfig{ID: id, Subdirectory: ".", Instructions: "complete task", MaxIterations: 1}, nil, tools.Workspace{Primary: s.RestrictedRoot}, nil, nil)
 			if result != "done" {
 				t.Errorf("subagent: %s", result)
 			}

@@ -125,29 +125,37 @@ func joinErrors(errs []error) string {
 }
 
 // RunSubagent spawns a sub-agent in the given subdirectory with a custom
-// system prompt and a filtered toolset. It inherits ignore rules from the
-// parent. Its model comes from cfg.Profile (a configured model chain with
+// system prompt and a filtered toolset. The subdirectory is relative to the
+// parent's primary root, or an absolute path inside any allowed root (/cd); the
+// sub-agent is then confined to that folder and inherits the parent's ignore
+// rules. Its model comes from cfg.Profile (a configured model chain with
 // fallbacks) and defaults to the active model of the main agent.
 // progressSink is an optional OutputSink (e.g. *types.SubagentBuffer) for
 // live UI updates; if nil, a SilentOutputSink is used internally.
-func RunSubagent(parentCtx context.Context, cfg SubagentConfig, parentIgnore *IgnoreManager, parentRoot string, mcpManager *mcp.MCPManager, progressSink types.OutputSink) string {
-	// 1. Resolve and validate subdirectory
-	absSubdir := cfg.Subdirectory
-	if !filepath.IsAbs(absSubdir) {
-		absSubdir = filepath.Join(parentRoot, absSubdir)
+func RunSubagent(parentCtx context.Context, cfg SubagentConfig, parentIgnore *IgnoreManager, ws Workspace, mcpManager *mcp.MCPManager, progressSink types.OutputSink) string {
+	// 1. Resolve and validate subdirectory. A relative name belongs to the
+	// parent's primary root; an absolute one may point inside any allowed root
+	// (that is how a sub-agent is spawned in a folder added with /cd).
+	rootAbs := ws.primaryRoot()
+	if rootAbs == "" {
+		return "subagent error: the parent session has no workspace root"
 	}
-	absSubdir, err := filepath.Abs(absSubdir)
-	if err != nil {
-		return fmt.Sprintf("subagent error: cannot resolve subdirectory: %v", err)
+	requested := cfg.Subdirectory
+	if !filepath.IsAbs(requested) {
+		requested = filepath.Join(rootAbs, requested)
 	}
-	// The separator matters: a bare prefix test would accept "/w2" for a "w"
-	// root, i.e. a different directory that merely shares the name.
-	rootAbs, err := filepath.Abs(parentRoot)
-	if err != nil {
-		return fmt.Sprintf("subagent error: cannot resolve the restricted root: %v", err)
-	}
-	if absSubdir != rootAbs && !strings.HasPrefix(absSubdir, rootAbs+string(filepath.Separator)) {
+	owner, rel, rerr := ws.resolve(requested, nil)
+	if rerr != nil {
+		// A name spelled inside an allowed root that resolves elsewhere is a
+		// symlink escape, not a path outside the workspace: say which one it is.
+		if _, ok := ws.lexicalRoot(requested); ok {
+			return fmt.Sprintf("subagent error: subdirectory %s resolves outside the restricted root: %v", cfg.Subdirectory, rerr)
+		}
 		return fmt.Sprintf("subagent error: subdirectory %s is outside the restricted root", cfg.Subdirectory)
+	}
+	absSubdir := filepath.Join(owner, rel)
+	if abs, aerr := filepath.Abs(absSubdir); aerr == nil {
+		absSubdir = abs
 	}
 	if fi, stErr := os.Stat(absSubdir); stErr != nil || !fi.IsDir() {
 		return fmt.Sprintf("subagent error: subdirectory %s does not exist or is not a directory", cfg.Subdirectory)
@@ -155,11 +163,14 @@ func RunSubagent(parentCtx context.Context, cfg SubagentConfig, parentIgnore *Ig
 	// os.Stat follows symlinks and absSubdir becomes the tools' restricted root:
 	// a link inside the workspace (e.g. "logs -> /var/log") would re-root the
 	// sub-agent outside it.
-	resolved, err := realPathWithinRoot(absSubdir, rootAbs)
+	resolved, err := realPathWithinRoot(absSubdir, owner)
 	if err != nil {
 		return fmt.Sprintf("subagent error: subdirectory %s resolves outside the restricted root: %v", cfg.Subdirectory, err)
 	}
 	absSubdir = resolved
+	// The sub-agent is confined to its own directory: it never inherits the
+	// parent's extra roots.
+	subWorkspace := NewWorkspace(absSubdir, nil)
 
 	// 2. Build sub-agent's ignore manager (parent + any local ignore files)
 	subIgnore := buildSubagentIgnore(parentIgnore, absSubdir)
@@ -347,7 +358,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 			// as the main agent (never the raw tool name).
 			lbl := DescribeTool(tc.Function.Name, tc.Function.Arguments)
 			sink.WriteToolOutput(strings.TrimSuffix(lbl.Present, "..."), "")
-			res := ExecuteToolWithSpinner(ctx, tc, subIgnore, absSubdir, mcpManager)
+			res := ExecuteToolWithSpinner(ctx, tc, subIgnore, subWorkspace, mcpManager)
 			doneLabel := lbl.Done
 			if types.ToolResultFailed(res.Text) {
 				doneLabel = lbl.Failed
@@ -368,7 +379,7 @@ OPERATIONAL INSTRUCTIONS (from main agent):
 
 // RunSubagents spawns multiple sub-agents concurrently and returns an
 // aggregated report of all results. Each sub-agent runs independently.
-func RunSubagents(ctx context.Context, agents []SubagentConfig, parentIgnore *IgnoreManager, parentRoot string, mcpManager *mcp.MCPManager) string {
+func RunSubagents(ctx context.Context, agents []SubagentConfig, parentIgnore *IgnoreManager, ws Workspace, mcpManager *mcp.MCPManager) string {
 	type agentResult struct {
 		ID     string
 		Result string
@@ -386,7 +397,7 @@ func RunSubagents(ctx context.Context, agents []SubagentConfig, parentIgnore *Ig
 		wg.Add(1)
 		go func(cfg SubagentConfig, agentBuf types.OutputSink) {
 			defer wg.Done()
-			res := RunSubagent(ctx, cfg, parentIgnore, parentRoot, mcpManager, agentBuf)
+			res := RunSubagent(ctx, cfg, parentIgnore, ws, mcpManager, agentBuf)
 			if agentBuf != nil {
 				if setter, ok := agentBuf.(interface{ SetDone(string) }); ok {
 					setter.SetDone(res)

@@ -12,7 +12,7 @@ import (
 //
 // IMPORTANT: this case does executeMu.Unlock() at the start and
 // defer executeMu.Lock() at the end. See the original in tools.go.
-func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalIgnore *IgnoreManager, restrictedRoot string, mcpManager *mcp.MCPManager) string {
+func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalIgnore *IgnoreManager, ws Workspace, mcpManager *mcp.MCPManager) string {
 	executeMu.Unlock()
 	defer executeMu.Lock()
 	rawAgents, ok := args["agents"].([]interface{})
@@ -60,7 +60,7 @@ func executeSpawnSubagentsTool(ctx context.Context, args map[string]any, globalI
 		})
 	}
 
-	result := RunSubagents(ctx, agents, globalIgnore, restrictedRoot, mcpManager)
+	result := RunSubagents(ctx, agents, globalIgnore, ws, mcpManager)
 	return result
 }
 

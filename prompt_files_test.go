@@ -21,7 +21,7 @@ func TestPreparePromptFiles(t *testing.T) {
 		}
 	}
 	input := "inspect @test.py @test.py and @\"with spaces.py\""
-	msg, names, err := preparePromptFiles(input, root, tools.LoadIgnoreFiles(root))
+	msg, names, err := preparePromptFiles(input, tools.Workspace{Primary: root}, tools.LoadIgnoreFiles(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestPreparePromptFiles(t *testing.T) {
 		t.Fatalf("unexpected prompt: %+v, %v", msg, names)
 	}
 	plain := "email@example.com `@test.py` \\@test.py"
-	msg, names, err = preparePromptFiles(plain, root, nil)
+	msg, names, err = preparePromptFiles(plain, tools.Workspace{Primary: root}, nil)
 	if err != nil || msg.Content != plain || len(names) != 0 {
 		t.Fatalf("literal mentions changed: %+v, %v, %v", msg, names, err)
 	}
@@ -44,7 +44,7 @@ func TestPreparePromptFilesImage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "photo.png"), b.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	msg, names, err := preparePromptFiles("look @photo.png", root, tools.LoadIgnoreFiles(root))
+	msg, names, err := preparePromptFiles("look @photo.png", tools.Workspace{Primary: root}, tools.LoadIgnoreFiles(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestPreparePromptFilesRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []string{"@missing.txt", "@../outside.txt", "@binary.bin", "@huge.txt", "@budget.txt", "@secret.txt", "@dir", "@" + strings.Repeat("x", 1025)} {
-		msg, names, err := preparePromptFiles(input, root, tools.LoadIgnoreFiles(root))
+		msg, names, err := preparePromptFiles(input, tools.Workspace{Primary: root}, tools.LoadIgnoreFiles(root))
 		if err == nil || msg.Content != "" || len(names) != 0 {
 			t.Errorf("expected atomic rejection for %q: %+v %v %v", input, msg, names, err)
 		}
@@ -85,7 +85,7 @@ func TestPreparePromptFilesCountLimit(t *testing.T) {
 		}
 		input += " @" + name
 	}
-	if _, _, err := preparePromptFiles(input, root, nil); err == nil {
+	if _, _, err := preparePromptFiles(input, tools.Workspace{Primary: root}, nil); err == nil {
 		t.Fatal("accepted too many files")
 	}
 }

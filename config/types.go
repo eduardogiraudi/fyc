@@ -234,6 +234,10 @@ type Config struct {
 	Crawl CrawlConfig `json:"crawl,omitempty"`
 	// Sandbox holds the opt-out switches of the `sh` command sandbox (see config/sandbox.go).
 	Sandbox SandboxConfig `json:"sandbox,omitempty"`
+	// Workspaces holds the root sets the user asked to remember with /cd: when
+	// fyc starts inside one of their roots it offers to restore them (see
+	// config/workspaces.go).
+	Workspaces []SavedWorkspace `json:"workspaces,omitempty"`
 	// rawSecrets holds the on-disk expression of every secret field captured at
 	// load time (see config/secrets.go). It is never persisted: SaveE uses it to
 	// keep an untouched ${VAR} placeholder instead of overwriting it with a
@@ -244,7 +248,7 @@ type Config struct {
 // CurrentSchemaVersion is the configuration file format understood by this
 // build. Bump it and add a migration in persistence.go when the on-disk shape
 // changes.
-const CurrentSchemaVersion = 16
+const CurrentSchemaVersion = 17
 
 // SchemaVersion implements store.SchemaVersioner so the store package knows
 // which migration target to reach when loading config.json.
