@@ -188,7 +188,9 @@ func TestSystemPromptListsEveryAllowedRoot(t *testing.T) {
 	multi := &ChatSession{RestrictedRoot: root}
 	multi.ws = newWorkspaceForTest(root, []string{second, third})
 	prompt := buildSystemPrompt("today", "", multi)
-	for _, want := range []string{"Workspace roots:", second, third, "absolute path"} {
+	// The roots are named as the workspace resolves them; the test deliberately
+	// keeps the temp spelling, which differs on Windows (RUNNER~1) and macOS.
+	for _, want := range []string{"Workspace roots:", config.ResolveDir(second), config.ResolveDir(third), "absolute path"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt does not mention %q:\n%s", want, prompt)
 		}

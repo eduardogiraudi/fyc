@@ -1,12 +1,14 @@
 package tools
 
 import (
-	"fuckyourcli/lsp"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"fuckyourcli/lsp"
+	"fuckyourcli/store"
 )
 
 func TestIgnoreManagerDirectoryRules(t *testing.T) {
@@ -218,5 +220,41 @@ func TestIgnoreManagerFYCRequiresFile(t *testing.T) {
 	im := LoadIgnoreFiles(root)
 	if !im.IsIgnored(filepath.Join(root, "hidden.txt"), root) {
 		t.Fatal("a directory named .fycignore must not replace .gitignore")
+	}
+}
+
+// A rule must protect a file whichever spelling the caller uses: the root the
+// manager was loaded with and the one its symlinks resolve to are the same
+// directory (macOS /var → /private/var, Windows 8.3 names).
+func TestIgnoreManagerMatchesBothSpellingsOfARoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeToolTestFile(t, real, ".gitignore", "*.log\n")
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+
+	// The two spellings of the root: the one the manager was loaded with and the
+	// one its symlinks resolve to (which is not `real` when TMPDIR is a link too).
+	resolved, err := store.ResolvePath(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	im := LoadIgnoreFiles(link)
+	for _, root := range []string{link, resolved} {
+		if !im.IsIgnored(filepath.Join(root, "debug.log"), root) {
+			t.Errorf("%s: the rule did not match under this spelling", root)
+		}
+		if im.IsIgnored(filepath.Join(root, "main.go"), root) {
+			t.Errorf("%s: main.go wrongly flagged as ignored", root)
+		}
+		if !im.IsIgnored(filepath.Join(root, ".git", "config"), root) {
+			t.Errorf("%s: .git is reachable under this spelling", root)
+		}
 	}
 }

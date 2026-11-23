@@ -295,8 +295,11 @@ func TestHITLUpdateCarriesTheDiff(t *testing.T) {
 	if payload["seeChanges"] != true {
 		t.Fatalf("expected seeChanges=true for an update, got %+v", payload)
 	}
-	if payload["diffFilename"] != target {
-		t.Fatalf("expected the diff to reference %s, got %+v", target, payload["diffFilename"])
+	// The client is handed the canonical file, not the temp spelling the test
+	// asked for: on Windows and macOS the two differ (RUNNER~1, /var).
+	wantTarget := filepath.Join(config.ResolveDir(dir), "existing.txt")
+	if payload["diffFilename"] != wantTarget {
+		t.Fatalf("expected the diff to reference %s, got %+v", wantTarget, payload["diffFilename"])
 	}
 	diff, _ := payload["diff"].([]interface{})
 	if len(diff) == 0 {

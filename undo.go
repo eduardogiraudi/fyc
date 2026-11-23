@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"fuckyourcli/store"
 	"fuckyourcli/tools"
 	"fuckyourcli/types"
 )
@@ -113,7 +114,8 @@ func (s *ChatSession) ensureUndoJournal() *undoJournal {
 	if s.Headless {
 		return nil
 	}
-	if s.journal != nil && s.journal.session == s.SessionID && s.journal.root == s.RestrictedRoot {
+	// The journal stores the resolved root: compare names, not spellings.
+	if s.journal != nil && s.journal.session == s.SessionID && store.SamePath(s.journal.root, s.RestrictedRoot) {
 		return s.journal
 	}
 	if err := ensureSessionIdentity(s); err != nil {

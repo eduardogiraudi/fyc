@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"fuckyourcli/config"
 )
 
 // A read-only git call without a path answers for every allowed root that is a
@@ -18,7 +20,9 @@ func TestGitReadToolsAnswerForEveryAllowedRoot(t *testing.T) {
 	ws := NewWorkspace(repoA, []string{repoB})
 
 	out := gitReadOnWorkspace(ws, map[string]any{"count": float64(5)}, executeGitLog)
-	if !strings.Contains(out, "## "+repoA) || !strings.Contains(out, "## "+repoB) {
+	// The sections name the roots as the workspace resolves them: the paths the
+	// caller typed and the canonical ones differ on macOS and on Windows (8.3).
+	if !strings.Contains(out, "## "+config.ResolveDir(repoA)) || !strings.Contains(out, "## "+config.ResolveDir(repoB)) {
 		t.Fatalf("git_log did not cover both roots:\n%s", out)
 	}
 

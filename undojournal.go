@@ -85,7 +85,9 @@ func (c fileChange) rootOr(primary string) string {
 // name inside the primary root, the root-qualified one everywhere else.
 func (c fileChange) displayPath(primary string) string {
 	root := c.rootOr(primary)
-	if root == "" || root == primary {
+	// The recorded root is the resolved one (walkRoot), so a caller's spelling
+	// would make every file look like it lives in an extra root.
+	if root == "" || store.SamePath(root, primary) {
 		return c.Path
 	}
 	return filepath.Join(root, filepath.FromSlash(c.Path))
@@ -132,6 +134,11 @@ func undoJournalDir(workspaceDir, sessionID string) string {
 
 // newUndoJournal prepares (or loads) the journal of a session.
 func newUndoJournal(root, session, dir string) *undoJournal {
+	// walkRoot records files under the resolved root; keeping the caller's
+	// spelling here would make every record look like it belongs elsewhere.
+	if resolved, err := store.ResolvePath(root); err == nil {
+		root = resolved
+	}
 	j := &undoJournal{root: root, roots: []string{root}, session: session, dir: dir, manifest: map[string]fileVersion{}}
 	if err := j.load(); err != nil {
 		store.Notice("undo journal: %v", err)

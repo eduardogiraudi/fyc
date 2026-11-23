@@ -31,7 +31,7 @@ func TestAddableRootRefusesBroadAndSensitiveFolders(t *testing.T) {
 		t.Fatal("the configuration directory was accepted")
 	}
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHomeDir(t, home)
 	if _, err := AddableRoot(home); err == nil {
 		t.Fatal("the whole home directory was accepted")
 	}
@@ -42,6 +42,16 @@ func TestAddableRootRefusesBroadAndSensitiveFolders(t *testing.T) {
 	if got, err := AddableRoot(project); err != nil || got != ResolveDir(project) {
 		t.Fatalf("AddableRoot(project) = %q, %v", got, err)
 	}
+}
+
+// setHomeDir points the variable os.UserHomeDir reads at dir: %USERPROFILE% on
+// Windows, $HOME everywhere else. Setting only HOME silently does nothing there,
+// and a test that then expects the home check to fire would pass for the wrong
+// reason (or fail on the next assertion).
+func setHomeDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 }
 
 // A folder that contains the home directory or the configuration directory is
@@ -57,7 +67,7 @@ func TestAddableRootRefusesFoldersThatContainHomeOrConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "auth.json"), []byte(`{"OPENAI_API_KEY":"sk-test"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	setHomeDir(t, home)
 	t.Setenv("FYC_CONFIG_DIR", cfgDir)
 
 	for _, p := range []string{home, cfgDir, filepath.Join(home, ".config"), base} {

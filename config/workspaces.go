@@ -90,7 +90,10 @@ func AddableRoot(dir string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", dir)
 	}
-	if root == string(filepath.Separator) {
+	// The filesystem root is the volume's own root: on Windows it is spelled
+	// `C:\` (or a UNC share root), never a bare separator, so comparing with
+	// string(filepath.Separator) alone would accept the whole drive.
+	if root == string(filepath.Separator) || root == filepath.VolumeName(root)+string(filepath.Separator) {
 		return "", fmt.Errorf("refusing to allow the filesystem root")
 	}
 	// A folder that CONTAINS the home directory, or fyc's configuration

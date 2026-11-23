@@ -43,3 +43,26 @@ func ResolvePath(p string) (string, error) {
 		cur = parent
 	}
 }
+
+// SamePath reports whether a and b name the same path once resolved. Callers
+// that hold both a user spelling and a canonical one must ask this instead of
+// comparing strings: /var and /private/var (macOS), and the 8.3 short names
+// Windows expands to the long one (C:\Users\RUNNER~1 → C:\Users\runneradmin),
+// make the two spellings differ while naming the same directory.
+func SamePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	ra, err := ResolvePath(a)
+	if err != nil {
+		return false
+	}
+	rb, err := ResolvePath(b)
+	if err != nil {
+		return false
+	}
+	return ra == rb
+}

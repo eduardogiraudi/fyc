@@ -163,7 +163,8 @@ func TestBindPathKeepsTheToolArgumentsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root != extra || bound["path"] != "outer.txt" {
+	// The owning root comes back resolved, like every root of the workspace.
+	if root != config.ResolveDir(extra) || bound["path"] != "outer.txt" {
 		t.Fatalf("bindPath = %q %v", root, bound)
 	}
 	if args["path"] == bound["path"] {

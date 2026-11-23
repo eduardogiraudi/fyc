@@ -57,3 +57,28 @@ func TestResolvePathRefusesADanglingLink(t *testing.T) {
 		t.Fatalf("ResolvePath(%q) = %q, want an error", dangling, got)
 	}
 }
+
+func TestSamePathComparesBothSpellings(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+
+	if !SamePath(link, real) {
+		t.Errorf("SamePath(%q, %q) = false, want true", link, real)
+	}
+	if !SamePath(filepath.Join(link, "a.txt"), filepath.Join(real, "a.txt")) {
+		t.Error("SamePath must compare the deepest existing ancestor, not just existing paths")
+	}
+	if SamePath(filepath.Join(real, "a.txt"), filepath.Join(real, "b.txt")) {
+		t.Error("two different files compared equal")
+	}
+	if SamePath("", real) || SamePath(real, "") {
+		t.Error("an empty path must never name a directory")
+	}
+}

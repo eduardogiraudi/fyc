@@ -186,6 +186,11 @@ func (s *ChatSession) initRestrictedRoot() {
 	if err != nil {
 		s.RestrictedRoot = "."
 	}
+	// One spelling for the whole session: the prompt, the ignore manager, the undo
+	// journal and the session store all compare roots by string. cwd is usually
+	// canonical already, but Windows may hand back an 8.3 name (RUNNER~1) that
+	// store.ResolvePath would expand later, leaving two spellings in flight.
+	s.RestrictedRoot = config.ResolveDir(s.RestrictedRoot)
 	s.ws = tools.NewWorkspace(s.RestrictedRoot, s.ExtraRoots)
 }
 

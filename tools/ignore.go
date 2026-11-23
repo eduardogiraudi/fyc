@@ -16,8 +16,25 @@ type ignoreFile struct {
 	matcher         *gitignore.GitIgnore
 	fyc             bool
 	scopeDir        string // directory containing the ignore file, relative to restrictedRoot
-	scopeAbs        string // precomputed absolute scope directory
+	scopeAbs        string // precomputed absolute scope directory (resolved spelling)
 	normalizedScope string // precomputed scopeAbs + separator
+	// altScope/altNormalized keep the spelling the root was given with when it
+	// differs from the resolved one. Paths reach isIgnored in either spelling
+	// (a caller's RUNNER~1, the workspace's runneradmin), and a rule that only
+	// knows one of them silently stops protecting anything.
+	altScope      string
+	altNormalized string
+}
+
+// scopeFor returns the spelling of the rule's scope that contains absPath.
+func (f ignoreFile) scopeFor(absPath string) (string, bool) {
+	if absPath == f.scopeAbs || strings.HasPrefix(absPath, f.normalizedScope) {
+		return f.scopeAbs, true
+	}
+	if f.altScope != f.scopeAbs && (absPath == f.altScope || strings.HasPrefix(absPath, f.altNormalized)) {
+		return f.altScope, true
+	}
+	return "", false
 }
 
 // IgnoreManager holds scoped .gitignore and .fycignore rules.
@@ -45,6 +62,21 @@ func LoadWorkspaceIgnore(roots []string) *IgnoreManager {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
+		// Rules are matched against paths the workspace already resolved, so the
+		// scopes must be spelled the same way: a short Windows name (RUNNER~1) or
+		// an unresolved macOS /var would otherwise never match anything and every
+		// ignore rule would silently stop applying. The caller's spelling is kept
+		// as the alternative, because tests and a few callers still walk the tree
+		// from the path they were given.
+		given, err := filepath.Abs(root)
+		if err != nil {
+			given = root
+		}
+		root = resolveRoot(root)
+		if root == "" {
+			continue
+		}
+		altGit := filepath.Join(given, ".git")
 		gitDir := filepath.Join(root, ".git")
 		if im.gitDir == "" {
 			im.gitDir = gitDir
@@ -52,13 +84,19 @@ func LoadWorkspaceIgnore(roots []string) *IgnoreManager {
 		} else {
 			im.extraGitDirs = append(im.extraGitDirs, gitDir)
 		}
-		im.collect(root)
+		// The same .git under the caller's spelling: a path built from the root as
+		// it was given must stay blocked too.
+		if altGit != gitDir {
+			im.extraGitDirs = append(im.extraGitDirs, altGit)
+		}
+		im.collect(root, given)
 	}
 	return im
 }
 
-// collect walks one root and appends the ignore files it finds.
-func (im *IgnoreManager) collect(root string) {
+// collect walks one root and appends the ignore files it finds. given is the
+// root as the caller spelled it, kept as the alternative scope spelling.
+func (im *IgnoreManager) collect(root, given string) {
 	var mu sync.Mutex
 	conf := fastwalk.Config{Follow: false}
 	fastwalk.Walk(&conf, root, func(path string, d fs.DirEntry, err error) error {
@@ -85,8 +123,10 @@ func (im *IgnoreManager) collect(root string) {
 			scopeDir = ""
 		}
 		scopeAbs := root
+		altScope := given
 		if scopeDir != "" {
 			scopeAbs = filepath.Join(root, scopeDir)
+			altScope = filepath.Join(given, scopeDir)
 		}
 		entry := ignoreFile{
 			matcher:         matcher,
@@ -94,6 +134,8 @@ func (im *IgnoreManager) collect(root string) {
 			scopeDir:        scopeDir,
 			scopeAbs:        scopeAbs,
 			normalizedScope: strings.TrimSuffix(scopeAbs, string(filepath.Separator)) + string(filepath.Separator),
+			altScope:        altScope,
+			altNormalized:   strings.TrimSuffix(altScope, string(filepath.Separator)) + string(filepath.Separator),
 		}
 		mu.Lock()
 		im.files = append(im.files, entry)
@@ -137,7 +179,10 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 	// A local fyc file replaces inherited git rules, not just a neighbouring file.
 	useFYC := false
 	for _, f := range im.files {
-		if f.fyc && (absPath == f.scopeAbs || strings.HasPrefix(absPath, f.normalizedScope)) {
+		if !f.fyc {
+			continue
+		}
+		if _, ok := f.scopeFor(absPath); ok {
 			useFYC = true
 			break
 		}
@@ -147,7 +192,11 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 	if !useFYC {
 		prefix := strings.TrimSuffix(absPath, string(filepath.Separator)) + string(filepath.Separator)
 		for _, f := range im.files {
-			if f.fyc && strings.HasPrefix(f.scopeAbs, prefix) {
+			if !f.fyc {
+				continue
+			}
+			if strings.HasPrefix(f.scopeAbs, prefix) ||
+				(f.altScope != f.scopeAbs && strings.HasPrefix(f.altScope, prefix)) {
 				containsFYC = true
 				break
 			}
@@ -157,12 +206,13 @@ func (im *IgnoreManager) isIgnored(absPath string, restrictedRoot string) bool {
 		if !f.fyc && (useFYC || (containsFYC && isDir())) {
 			continue
 		}
-		// Skip if path is outside this rule's scope
-		if !strings.HasPrefix(absPath, f.normalizedScope) && absPath != f.scopeAbs {
+		// Skip if path is outside this rule's scope, trying both spellings.
+		scope, ok := f.scopeFor(absPath)
+		if !ok {
 			continue
 		}
 		// Slice the prefix directly instead of filepath.Rel to avoid allocation
-		relToScope := filepath.ToSlash(absPath[len(f.scopeAbs):])
+		relToScope := filepath.ToSlash(absPath[len(scope):])
 		relToScope = strings.TrimPrefix(relToScope, "/")
 
 		if f.matcher.MatchesPath(relToScope) || (f.matcher.MatchesPath(relToScope+"/") && isDir()) {
