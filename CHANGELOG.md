@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.7.1] - 2026-11-25
+
+### Fixed
+
+- mcp: send the server-published tool schema instead of re-deriving it (`d8735d4`).
+
 ## [1.7.0] - 2026-11-23
 
 ### Added
