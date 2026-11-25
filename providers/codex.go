@@ -466,23 +466,28 @@ func decodeReasoningItems(raw string) []map[string]interface{} {
 func convertToolsToCodex(tools []types.Tool) []map[string]interface{} {
 	var codexTools []map[string]interface{}
 	for _, tool := range tools {
-		properties := make(map[string]interface{})
-		required := make([]string, 0)
-		for name, prop := range tool.Function.Parameters.Properties {
-			properties[name] = prop.ToSchema()
-			for _, req := range tool.Function.Parameters.Required {
-				if req == name {
-					required = append(required, name)
-					break
+		// MCP tools ship the schema their server published; rebuilding it from
+		// the typed properties dropped everything but flat scalars.
+		params := tool.Function.Parameters.RawSchema
+		if len(params) == 0 {
+			properties := make(map[string]interface{})
+			required := make([]string, 0)
+			for name, prop := range tool.Function.Parameters.Properties {
+				properties[name] = prop.ToSchema()
+				for _, req := range tool.Function.Parameters.Required {
+					if req == name {
+						required = append(required, name)
+						break
+					}
 				}
 			}
-		}
-		params := map[string]interface{}{
-			"type":       "object",
-			"properties": properties,
-		}
-		if len(required) > 0 {
-			params["required"] = required
+			params = map[string]interface{}{
+				"type":       "object",
+				"properties": properties,
+			}
+			if len(required) > 0 {
+				params["required"] = required
+			}
 		}
 		codexTools = append(codexTools, map[string]interface{}{
 			"type":        "function",

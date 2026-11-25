@@ -313,35 +313,40 @@ func convertToolsToOpenAI(tools []types.Tool) []OpenAITool {
 	var openaiTools []OpenAITool
 
 	for _, tool := range tools {
-		// Collect property names sorted — deterministic JSON serialization for prefix caching
-		propNames := make([]string, 0, len(tool.Function.Parameters.Properties))
-		for name := range tool.Function.Parameters.Properties {
-			propNames = append(propNames, name)
-		}
-		sort.Strings(propNames)
+		// MCP tools ship the schema their server published; rebuilding it from
+		// the typed properties dropped everything but flat scalars.
+		params := tool.Function.Parameters.RawSchema
+		if len(params) == 0 {
+			// Collect property names sorted — deterministic JSON serialization for prefix caching
+			propNames := make([]string, 0, len(tool.Function.Parameters.Properties))
+			for name := range tool.Function.Parameters.Properties {
+				propNames = append(propNames, name)
+			}
+			sort.Strings(propNames)
 
-		orderedProps := make([]orderedProp, 0, len(propNames))
-		for _, name := range propNames {
-			prop := tool.Function.Parameters.Properties[name]
-			orderedProps = append(orderedProps, orderedProp{name, prop.ToSchema()})
-		}
+			orderedProps := make([]orderedProp, 0, len(propNames))
+			for _, name := range propNames {
+				prop := tool.Function.Parameters.Properties[name]
+				orderedProps = append(orderedProps, orderedProp{name, prop.ToSchema()})
+			}
 
-		// Marshal properties as a JSON object with sorted keys
-		propertiesJSON := marshalOrderedProperties(orderedProps)
+			// Marshal properties as a JSON object with sorted keys
+			propertiesJSON := marshalOrderedProperties(orderedProps)
 
-		// Build required list sorted
-		required := make([]string, 0)
-		for _, req := range tool.Function.Parameters.Required {
-			required = append(required, req)
-		}
-		sort.Strings(required)
+			// Build required list sorted
+			required := make([]string, 0)
+			for _, req := range tool.Function.Parameters.Required {
+				required = append(required, req)
+			}
+			sort.Strings(required)
 
-		params := map[string]interface{}{
-			"type":       "object",
-			"properties": json.RawMessage(propertiesJSON),
-		}
-		if len(required) > 0 {
-			params["required"] = required
+			params = map[string]interface{}{
+				"type":       "object",
+				"properties": json.RawMessage(propertiesJSON),
+			}
+			if len(required) > 0 {
+				params["required"] = required
+			}
 		}
 
 		openaiTools = append(openaiTools, OpenAITool{

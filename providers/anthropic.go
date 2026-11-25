@@ -571,17 +571,9 @@ func convertMessagesToAnthropic(messages []types.Message) ([]anthropicContentBlo
 func convertToolsToAnthropic(tools []types.Tool) []anthropicTool {
 	anthropicTools := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]interface{})
-		for name, prop := range tool.Function.Parameters.Properties {
-			properties[name] = prop.ToSchema()
-		}
-		schema := map[string]interface{}{
-			"type":       "object",
-			"properties": properties,
-		}
-		if len(tool.Function.Parameters.Required) > 0 {
-			schema["required"] = tool.Function.Parameters.Required
-		}
+		// MCP tools carry the schema their server published; re-deriving it from
+		// the typed properties lost every nested/anyOf construct.
+		schema := tool.Function.Parameters.Schema()
 		anthropicTools = append(anthropicTools, anthropicTool{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,

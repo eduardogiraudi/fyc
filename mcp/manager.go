@@ -286,6 +286,13 @@ func (m *MCPManager) listToolsOnce(ctx context.Context, serverNames []string) ([
 						}
 					}
 				}
+
+				// The published schema travels with the tool: the typed
+				// properties above cannot express nested objects, items or a
+				// nullable anyOf union, and re-deriving them emitted an invalid
+				// "type": "" that the provider rejected the whole request for.
+				params.RawSchema = types.SanitizeJSONSchema(schemaMap)
+				t.Function.Parameters = params
 				t.Function.Parameters = params
 			}
 

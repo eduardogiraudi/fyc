@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -315,38 +316,19 @@ func convertToolsToGeminiNative(tools []types.Tool) []GeminiTool {
 	functionDeclarations := make([]GeminiFunctionDeclaration, 0)
 
 	for _, tool := range tools {
-		params := make(map[string]interface{})
-
-		if tool.Function.Parameters.Type == "object" {
-			params["type"] = "object"
-
-			properties := make(map[string]interface{})
-			required := make([]string, 0)
-
-			for name, prop := range tool.Function.Parameters.Properties {
-				propSchema := prop.ToSchema()
-				properties[name] = propSchema
-
-				for _, req := range tool.Function.Parameters.Required {
-					if req == name {
-						required = append(required, name)
-						break
-					}
-				}
-			}
-
-			if len(properties) > 0 {
-				params["properties"] = properties
-			}
-
-			if len(required) > 0 {
-				params["required"] = required
-			}
-		}
-
 		var finalParams map[string]interface{}
-		if len(params) > 0 {
-			finalParams = params
+		// MCP tools ship the schema their server published (already reduced to
+		// what every dialect understands by types.SanitizeJSONSchema).
+		if schema := tool.Function.Parameters.Schema(); len(schema) > 0 {
+			// Clone: the schema is shared with the tool and deleting a key must
+			// not travel back to it.
+			finalParams = maps.Clone(schema)
+			if props, ok := finalParams["properties"].(map[string]interface{}); ok && len(props) == 0 {
+				delete(finalParams, "properties")
+			}
+			if len(finalParams) == 0 {
+				finalParams = nil
+			}
 		}
 
 		functionDeclarations = append(functionDeclarations, GeminiFunctionDeclaration{

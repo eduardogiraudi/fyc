@@ -17,8 +17,12 @@ type ToolProperty struct {
 
 // ToSchema recursively converts ToolProperty into a JSON Schema compatible map.
 func (p *ToolProperty) ToSchema() map[string]interface{} {
-	schema := map[string]interface{}{
-		"type": p.Type,
+	schema := make(map[string]interface{}, 4)
+	// An empty "type" is not a valid JSON Schema and every provider rejects the
+	// whole request because of it: a property published as anyOf (a nullable
+	// parameter) simply has no single type to report.
+	if p.Type != "" {
+		schema["type"] = p.Type
 	}
 	if p.Description != "" {
 		schema["description"] = p.Description
@@ -43,7 +47,36 @@ func (p *ToolProperty) ToSchema() map[string]interface{} {
 type ToolParameters struct {
 	Type       string                  `json:"type"`
 	Properties map[string]ToolProperty `json:"properties"`
-	Required   []string                `json:"required"`
+	Required   []string                `json:"required,omitempty"`
+	// RawSchema is the JSON Schema a server published for this tool (MCP),
+	// already sanitised by SanitizeJSONSchema. It is authoritative when set: the
+	// typed fields above only model flat scalar properties, so re-deriving the
+	// schema dropped nested objects, items and anyOf unions.
+	RawSchema map[string]interface{} `json:"-"`
+}
+
+// Schema returns the JSON Schema to send to a provider: the published one when
+// the tool came from a server, the reconstructed one for local tools.
+func (p ToolParameters) Schema() map[string]interface{} {
+	if len(p.RawSchema) > 0 {
+		return p.RawSchema
+	}
+	typ := p.Type
+	if typ == "" {
+		typ = "object"
+	}
+	properties := make(map[string]interface{}, len(p.Properties))
+	for name, prop := range p.Properties {
+		properties[name] = prop.ToSchema()
+	}
+	schema := map[string]interface{}{
+		"type":       typ,
+		"properties": properties,
+	}
+	if len(p.Required) > 0 {
+		schema["required"] = p.Required
+	}
+	return schema
 }
 
 // ToolFunction defines a function/tool

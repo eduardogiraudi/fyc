@@ -340,6 +340,12 @@ func TestListToolsMapsSchemaAndNamespacesServers(t *testing.T) {
 					Type:       "object",
 					Properties: map[string]types.ToolProperty{"path": {Type: "string", Description: "Path to echo"}},
 					Required:   []string{"path"},
+					// The published schema travels verbatim, sanitised.
+					RawSchema: map[string]interface{}{
+						"type":       "object",
+						"properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Path to echo"}},
+						"required":   []interface{}{"path"},
+					},
 				},
 			},
 		}
@@ -365,6 +371,60 @@ func TestListToolsMapsSchemaAndNamespacesServers(t *testing.T) {
 	listed, err = manager.listToolsOnce(ctx, []string{"removed", "alpha"})
 	if err != nil || len(listed) != 1 || listed[0].Function.Name != "alpha__echo__path" {
 		t.Fatalf("list with removed session = %v, %v", listed, err)
+	}
+}
+
+// TestListToolsKeepsPublishedSchema covers the shape a FastMCP server publishes
+// for Optional[...] parameters (an anyOf with a null branch and no "type"):
+// re-deriving the schema from the typed properties emitted "type": "", which
+// made Anthropic reject every request with a 400 invalid_request_error.
+func TestListToolsKeepsPublishedSchema(t *testing.T) {
+	ctx := managerTestContext(t)
+	manager := managerForTest(t)
+	server := sdk.NewServer(&sdk.Implementation{Name: "blender", Version: "test"}, nil)
+	server.AddTool(&sdk.Tool{
+		Name:        "get_scene_info",
+		Description: "Read the scene",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"root": map[string]any{
+					"anyOf":       []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}},
+					"description": "An object whose whole hierarchy to list.",
+				},
+				"objects": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+				},
+			},
+		},
+	}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "ok"}}}, nil
+	})
+	connectMemoryServer(t, ctx, manager, "blender", server)
+
+	listed, err := manager.ListTools(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed %d tools, want 1", len(listed))
+	}
+	params := listed[0].Function.Parameters
+	if len(params.RawSchema) == 0 {
+		t.Fatal("the published schema must travel with the tool")
+	}
+	raw, err := json.Marshal(params.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"type":""`) {
+		t.Fatalf("invalid empty type in %s", raw)
+	}
+	for _, want := range []string{`"type":"string"`, `"name":{"type":"string"}`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("schema lost %s: %s", want, raw)
+		}
 	}
 }
 
