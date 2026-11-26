@@ -55,6 +55,17 @@ func ExecuteToolWithSpinner(ctx context.Context, call types.ToolCall, globalIgno
 		return textResult(msg)
 	}
 
+	// Capture the pre-image of what this call may overwrite BEFORE it runs. A
+	// tool that names its targets costs one file; one that writes anywhere (sh,
+	// a git rewrite, an MCP server) gets the workspace. That is what keeps the
+	// journal copy-on-write: a turn never copies the tree up front.
+	if journal := currentTurnJournal(); journal != nil && toolMayWrite(call.Function.Name) {
+		if targets, declared := toolTargetPaths(call.Function.Name, call.Function.Arguments, ws, globalIgnore); declared {
+			journal.Prepare(targets, globalIgnore)
+		} else {
+			journal.PrepareTree(ws.Primary, globalIgnore)
+		}
+	}
 	res := dispatchToolCall(ctx, call, globalIgnore, ws, mcpManager)
 
 	// Record what the call changed before anything else runs: the undo journal

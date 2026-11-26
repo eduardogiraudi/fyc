@@ -31,6 +31,47 @@ func TestCtrlCWhileGeneratingCancelsInsteadOfQuitting(t *testing.T) {
 	}
 }
 
+// ctrl+c right after the submit — before ProcessInput registered the turn
+// context (it is still preparing the prompt: the journal snapshot, the project
+// context, the prompt files) — must not be dropped. The interrupt is latched
+// and the context the turn creates afterwards starts cancelled, so the turn
+// aborts before the provider is even called instead of waiting for the first
+// token to make ctrl+c work.
+func TestCtrlCBeforeTurnContextIsLatched(t *testing.T) {
+	s := &ChatSession{}
+	m := newChatModel(s, nil, nil, nil)
+	m.generating = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if updated.(chatModel).quitting {
+		t.Fatal("ctrl+c during a turn must not quit the program")
+	}
+
+	ctx := newGenerationContext(s)
+	defer finishGeneration(s)
+	if ctx.Err() == nil {
+		t.Fatal("a latched ctrl+c must start the turn already cancelled")
+	}
+}
+
+// The latch is scoped to one turn: once newGenerationContext consumed it, the
+// next turn runs normally.
+func TestLatchedInterruptDoesNotLeakIntoTheNextTurn(t *testing.T) {
+	s := &ChatSession{}
+	s.interruptTurn() // no turn registered yet
+	first := newGenerationContext(s)
+	finishGeneration(s)
+	if first.Err() == nil {
+		t.Fatal("the latched interrupt was not consumed")
+	}
+
+	second := newGenerationContext(s)
+	defer finishGeneration(s)
+	if second.Err() != nil {
+		t.Fatal("a consumed latch must not abort the next turn")
+	}
+}
+
 // ctrl+c while the program is idle keeps the historical behaviour: it quits.
 func TestCtrlCWhenIdleQuits(t *testing.T) {
 	s := &ChatSession{}

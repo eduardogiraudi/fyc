@@ -212,12 +212,11 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.generating {
 				// Interrupt the turn: cancelling its context aborts the provider
 				// stream AND stops a tool that is running (e.g. sh), without
-				// quitting the program. Only an idle ctrl+c quits.
-				m.session.GenerationCancelMu.Lock()
-				if m.session.GenerationCancel != nil {
-					m.session.GenerationCancel()
-				}
-				m.session.GenerationCancelMu.Unlock()
+				// quitting the program. A turn that has not registered its
+				// context yet (ProcessInput is still preparing the prompt) latches
+				// the interrupt, so a ctrl+c before the first token still lands
+				// instead of being dropped. Only an idle ctrl+c quits.
+				m.session.interruptTurn()
 				return m, nil
 			}
 			m.quitting = true
@@ -374,6 +373,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.generating = true
+		// A ctrl+c that no turn consumed (a command that never started a turn)
+		// must not abort this one: every submit begins with an empty latch.
+		m.session.clearInterrupt()
 		// A new turn is the reader's own action: jump back to the live output
 		// instead of leaving them on the rows they had scrolled to.
 		if m.transcript != nil {

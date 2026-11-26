@@ -81,6 +81,14 @@ type ChatSession struct {
 	IsGenerating       atomic.Int32
 	GenerationCancel   context.CancelFunc
 	GenerationCancelMu sync.Mutex
+	// interruptRequested latches a ctrl+c that arrived before the turn had a
+	// cancel func (ProcessInput is still preparing it: the anchor/journal
+	// snapshot, the project context, the prompt files), so the turn's context is
+	// created already cancelled instead of the interrupt being swallowed. It is
+	// scoped to one submit: the chat clears it when a prompt is submitted, and
+	// newGenerationContext consumes it, so a latch no turn consumed can never
+	// abort the next one. Guarded by GenerationCancelMu.
+	interruptRequested bool
 
 	SubagentToolsSessionEnabled *bool
 	WebSearchSessionOverride    *bool

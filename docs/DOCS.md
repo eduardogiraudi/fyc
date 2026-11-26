@@ -407,6 +407,12 @@ with every later one, and everything the discarded turns produced is rolled back
   `delete`, `rename`, `move`, `copy`, `make_dir`, the mutating git tools and `sh`
   — a shell command is as much a model change as a patch). Rewinding restores the
   pre-turn bytes, recreates deleted files and removes the ones the turns created.
+  The journal is copy-on-write: starting a turn only records the fingerprint
+  (size, mtime) of every file, and the bytes are stored just before a call that
+  names its target (`write`, `delete`, `copy`, …); a tool that can write anywhere
+  (`sh`, a git rewrite, an MCP server) gets the whole workspace copied as its
+  pre-image, once per file and in parallel. A file that changed without any pass
+  capturing it is reported as not restorable instead of being overwritten.
 - **Anchors**: the anchor cache is restored to the boundary, invalidations
   included, so the model can keep patching without re-reading a file.
 

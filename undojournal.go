@@ -8,9 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"fuckyourcli/store"
 	"fuckyourcli/tools"
@@ -113,9 +115,15 @@ type undoJournal struct {
 	base     int
 	manifest map[string]fileVersion
 	turns    [][]fileChange
+	// blobMu guards budget and the blob writes: a capture pass reads files in
+	// parallel (see captureAll), so the per-turn byte budget is shared.
+	blobMu sync.Mutex
 	// budget tracks the bytes stored for the turn in progress.
-	budget  int
-	partial bool
+	budget int
+	// partial is set when the snapshot could not cover the workspace (limits,
+	// unreadable files). It is written by the capture workers, off the journal
+	// lock, so it is atomic.
+	partial atomic.Bool
 }
 
 // changeKey identifies one path across every allowed root.
@@ -246,7 +254,9 @@ func (j *undoJournal) BeginTurn(n int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.grow(n)
+	j.blobMu.Lock()
 	j.budget = 0
+	j.blobMu.Unlock()
 }
 
 func (j *undoJournal) grow(n int) {
@@ -274,30 +284,112 @@ func (j *undoJournal) turnAt(n int) []fileChange {
 // currentTurn is the index of the turn being recorded.
 func (j *undoJournal) currentTurn() int { return j.base + len(j.turns) - 1 }
 
-// Sync brings the manifest up to date with the disk and stores the bytes of the
-// files that changed since the last sync. It runs at the start of a turn, so the
-// pre-image of everything a turn is about to change is already in the store.
-// root is the caller's workspace (a sub-agent's subdirectory): the journal always
-// covers every allowed root, which is a superset of it.
+// walkEntry is one regular file the walk saw: the stat fingerprint is all a pass
+// needs until something captures its bytes.
+type walkEntry struct {
+	root, rel, abs string
+	size, mtime    int64
+	mode           uint32
+}
+
+// fingerprint is the version a stat pass records for a file whose bytes are not
+// stored.
+func (e walkEntry) fingerprint() fileVersion {
+	return fileVersion{Exists: true, Mode: e.mode, size: e.size, mtime: e.mtime}
+}
+
+// synced reports whether the manifest entry still describes this file: only the
+// fingerprint is compared, because nothing about the content changed.
+func (v fileVersion) synced(e walkEntry) bool {
+	return v.Exists && v.size == e.size && v.mtime == e.mtime
+}
+
+// recoverable reports whether the bytes of the version are in the store. A
+// version that existed but was never captured cannot be written back: a rewind
+// has to say so instead of restoring an empty file.
+func (v fileVersion) recoverable() bool { return !v.Exists || v.Hash != "" }
+
+// walkEntries walks every covered root outside the journal lock: it is the slow,
+// I/O-bound part of a snapshot, and no rewind has to wait behind it.
+func (j *undoJournal) walkEntries(ig *tools.IgnoreManager) ([]walkEntry, map[string]bool) {
+	j.mu.Lock()
+	roots := append([]string(nil), j.walkRoots()...)
+	im := j.ignoreManager(ig)
+	j.mu.Unlock()
+	var entries []walkEntry
+	seen := map[string]bool{}
+	for _, root := range roots {
+		j.walkRoot(root, im, func(root, rel, abs string, info fs.FileInfo) {
+			seen[changeKey(root, rel)] = true
+			entries = append(entries, walkEntry{root: root, rel: rel, abs: abs,
+				size: info.Size(), mtime: info.ModTime().UnixNano(), mode: uint32(info.Mode().Perm())})
+		})
+	}
+	return entries, seen
+}
+
+// captureWorkers bounds how many files one capture pass reads at once: the pass
+// is I/O bound, but a whole-workspace capture must not open the tree in one go.
+func captureWorkers() int { return min(max(runtime.NumCPU(), 4), 16) }
+
+// captureAll stores the bytes of the given files with a bounded worker pool and
+// returns their versions keyed like the manifest. The caller keeps its own order
+// for recording, so what is written stays deterministic.
+func (j *undoJournal) captureAll(entries []walkEntry) map[string]fileVersion {
+	out := make(map[string]fileVersion, len(entries))
+	if len(entries) == 0 {
+		return out
+	}
+	type captured struct {
+		key string
+		ver fileVersion
+	}
+	results := make(chan captured, len(entries))
+	index := make(chan walkEntry)
+	workers := min(captureWorkers(), len(entries))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for e := range index {
+				results <- captured{key: changeKey(e.root, e.rel), ver: j.capture(e)}
+			}
+		}()
+	}
+	go func() {
+		for _, e := range entries {
+			index <- e
+		}
+		close(index)
+		wg.Wait()
+		close(results)
+	}()
+	for c := range results {
+		out[c.key] = c.ver
+	}
+	return out
+}
+
+// Sync records the fingerprint of every file of the workspace and stores not a
+// single byte. A pre-image is captured when something is about to write the file
+// (Prepare) or before a tool that cannot name its targets (PrepareTree), so
+// starting a turn no longer copies the whole workspace.
 func (j *undoJournal) Sync(_ string, ig *tools.IgnoreManager) {
 	if j == nil {
 		return
 	}
+	entries, seen := j.walkEntries(ig)
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	im := j.ignoreManager(ig)
-	seen := map[string]bool{}
-	for _, root := range j.walkRoots() {
-		j.walkRoot(root, im, func(root, rel, abs string, info fs.FileInfo) {
-			key := changeKey(root, rel)
-			seen[key] = true
-			if v, ok := j.manifest[key]; ok && v.size == info.Size() && v.mtime == info.ModTime().UnixNano() {
-				return
-			}
-			ver, err := j.capture(rel, abs, info)
-			ver.unrecoverable = err != nil
-			j.manifest[key] = ver
-		})
+	for _, e := range entries {
+		key := changeKey(e.root, e.rel)
+		if prev, ok := j.manifest[key]; ok && prev.synced(e) {
+			continue
+		}
+		// The stored hash goes with the old fingerprint: it describes bytes this
+		// file no longer has.
+		j.manifest[key] = e.fingerprint()
 	}
 	// An entry leaves the manifest only when its file is really gone. A file the
 	// walk did not visit keeps its pre-image: it can be missing from the walk
@@ -312,38 +404,153 @@ func (j *undoJournal) Sync(_ string, ig *tools.IgnoreManager) {
 	}
 }
 
+// Prepare stores the pre-images of the files a call declares it is about to
+// write, before it runs. It is the copy-on-write half of the journal: a turn
+// copies what a tool actually names, not the workspace.
+func (j *undoJournal) Prepare(paths []string, ig *tools.IgnoreManager) {
+	if j == nil || len(paths) == 0 {
+		return
+	}
+	j.mu.Lock()
+	roots := append([]string(nil), j.walkRoots()...)
+	im := j.ignoreManager(ig)
+	j.mu.Unlock()
+	var todo []walkEntry
+	for _, path := range paths {
+		e, ok := entryForPath(path, roots, im)
+		if !ok {
+			continue
+		}
+		j.mu.Lock()
+		prev, known := j.manifest[changeKey(e.root, e.rel)]
+		j.mu.Unlock()
+		// The bytes of a file that did not change since it was captured are
+		// already in the store.
+		if known && prev.synced(e) && prev.recoverable() {
+			continue
+		}
+		todo = append(todo, e)
+	}
+	versions := j.captureAll(todo)
+	if len(versions) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for key, ver := range versions {
+		j.manifest[key] = ver
+	}
+}
+
+// PrepareTree stores the pre-image of the whole workspace, for a tool that cannot
+// declare what it touches: sh, a git rewrite, an MCP server. It is the only pass
+// that still reads every file, and it is paid once per file: an entry that
+// already holds its bytes is skipped.
+func (j *undoJournal) PrepareTree(_ string, ig *tools.IgnoreManager) {
+	if j == nil {
+		return
+	}
+	entries, _ := j.walkEntries(ig)
+	j.mu.Lock()
+	var todo []walkEntry
+	for _, e := range entries {
+		if prev, ok := j.manifest[changeKey(e.root, e.rel)]; ok && prev.synced(e) && prev.recoverable() {
+			continue
+		}
+		todo = append(todo, e)
+	}
+	j.mu.Unlock()
+	if len(todo) == 0 {
+		return
+	}
+	versions := j.captureAll(todo)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for key, ver := range versions {
+		j.manifest[key] = ver
+	}
+}
+
+// entryForPath maps one path to the walk entry of the regular file it names. It
+// reports false for a file that does not exist yet (there is nothing to
+// preserve), a directory, a path outside every root and an ignored artifact.
+func entryForPath(path string, roots []string, ig *tools.IgnoreManager) (walkEntry, bool) {
+	if strings.TrimSpace(path) == "" {
+		return walkEntry{}, false
+	}
+	abs, err := store.ResolvePath(path)
+	if err != nil {
+		return walkEntry{}, false
+	}
+	for _, root := range roots {
+		// The walk records files under the resolved root: the key has to match.
+		resolved := root
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			resolved = r
+		}
+		if !insideRoot(resolved, abs) {
+			continue
+		}
+		rel, err := filepath.Rel(resolved, abs)
+		if err != nil || !relInside(rel) {
+			return walkEntry{}, false
+		}
+		if ig != nil && ig.IsIgnored(abs, resolved) {
+			return walkEntry{}, false
+		}
+		info, err := os.Lstat(abs)
+		if err != nil || !info.Mode().IsRegular() {
+			return walkEntry{}, false
+		}
+		return walkEntry{root: resolved, rel: filepath.ToSlash(rel), abs: abs,
+			size: info.Size(), mtime: info.ModTime().UnixNano(), mode: uint32(info.Mode().Perm())}, true
+	}
+	return walkEntry{}, false
+}
+
 // Collect attributes every change since the last Sync/Collect to the turn in
-// progress and updates the manifest to the new state.
+// progress and updates the manifest to the new state. The bytes of the changed
+// files are read off the journal lock, in parallel.
 func (j *undoJournal) Collect(_ string, ig *tools.IgnoreManager) {
 	if j == nil {
 		return
 	}
 	j.mu.Lock()
-	defer j.mu.Unlock()
-	if len(j.turns) == 0 {
+	open := len(j.turns) > 0
+	j.mu.Unlock()
+	if !open {
 		return
 	}
+	entries, seen := j.walkEntries(ig)
+	j.mu.Lock()
+	var changed []walkEntry
+	for _, e := range entries {
+		if prev, ok := j.manifest[changeKey(e.root, e.rel)]; ok && prev.synced(e) {
+			continue
+		}
+		changed = append(changed, e)
+	}
+	j.mu.Unlock()
+	versions := j.captureAll(changed)
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	turn := j.currentTurn()
-	im := j.ignoreManager(ig)
-	seen := map[string]bool{}
-	for _, root := range j.walkRoots() {
-		j.walkRoot(root, im, func(root, rel, abs string, info fs.FileInfo) {
-			key := changeKey(root, rel)
-			seen[key] = true
-			prev, known := j.manifest[key]
-			if known && prev.size == info.Size() && prev.mtime == info.ModTime().UnixNano() {
-				return
-			}
-			after, err := j.capture(rel, abs, info)
-			after.unrecoverable = err != nil
-			before := prev
-			if !known {
-				before = fileVersion{}
-			}
-			uncaptured := err != nil || prev.unrecoverable
-			j.record(turn, fileChange{Root: root, Path: rel, Before: before, After: after, Uncaptured: uncaptured})
-			j.manifest[key] = after
-		})
+	for _, e := range changed {
+		key := changeKey(e.root, e.rel)
+		after, captured := versions[key]
+		if !captured {
+			continue
+		}
+		before := fileVersion{}
+		if prev, known := j.manifest[key]; known {
+			before = prev
+		}
+		// A version whose bytes are not in the store cannot be restored: record
+		// it as skipped rather than pretend the rewind will work.
+		uncaptured := after.unrecoverable || !before.recoverable()
+		j.record(turn, fileChange{Root: e.root, Path: e.rel, Before: before, After: after, Uncaptured: uncaptured})
+		j.manifest[key] = after
 	}
 	for key, prev := range j.manifest {
 		if seen[key] {
@@ -363,7 +570,7 @@ func (j *undoJournal) Collect(_ string, ig *tools.IgnoreManager) {
 			Path:       rel,
 			Before:     prev,
 			After:      fileVersion{},
-			Uncaptured: prev.unrecoverable,
+			Uncaptured: prev.unrecoverable || !prev.recoverable(),
 		}
 		j.record(turn, change)
 	}
@@ -436,7 +643,7 @@ func (j *undoJournal) walkRoot(root string, ig *tools.IgnoreManager, visit func(
 		}
 		visited++
 		if visited > undoMaxWalkFiles {
-			j.partial = true
+			j.partial.Store(true)
 			return filepath.SkipAll
 		}
 		if ig != nil && ig.IsIgnored(path, root) {
@@ -458,26 +665,31 @@ func (j *undoJournal) walkRoot(root string, ig *tools.IgnoreManager, visit func(
 	}
 }
 
-// capture records the version of one file and stores its bytes. It returns an
-// error when the file is above the per-file limit (nothing is stored).
-func (j *undoJournal) capture(rel, abs string, info fs.FileInfo) (fileVersion, error) {
-	ver := fileVersion{Exists: true, Mode: uint32(info.Mode().Perm()), size: info.Size(), mtime: info.ModTime().UnixNano()}
-	if info.Size() > undoMaxFileBytes {
-		j.partial = true
-		return ver, fmt.Errorf("%s: %d bytes is above the snapshot limit", rel, info.Size())
+// capture reads one file and stores its bytes, returning the version to record.
+// A file whose bytes cannot be kept (above the per-file limit, unreadable, over
+// the turn budget) comes back marked unrecoverable, so a rewind reports it
+// instead of writing an empty file. It takes no journal lock: capture workers
+// run concurrently (see captureAll).
+func (j *undoJournal) capture(e walkEntry) fileVersion {
+	ver := e.fingerprint()
+	ver.unrecoverable = true
+	if e.size > undoMaxFileBytes {
+		j.partial.Store(true)
+		return ver
 	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(e.abs)
 	if err != nil {
-		j.partial = true
-		return ver, err
+		j.partial.Store(true)
+		return ver
 	}
 	sum := sha256.Sum256(data)
 	ver.Hash = hex.EncodeToString(sum[:])
 	if err := j.store(ver.Hash, data); err != nil {
-		j.partial = true
-		return ver, err
+		j.partial.Store(true)
+		return ver
 	}
-	return ver, nil
+	ver.unrecoverable = false
+	return ver
 }
 
 // store writes content into the content-addressed blob directory.
@@ -486,8 +698,11 @@ func (j *undoJournal) store(hash string, data []byte) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
+	// The budget belongs to the turn, and the workers share it.
+	j.blobMu.Lock()
+	defer j.blobMu.Unlock()
 	if j.budget+len(data) > undoMaxTurnBytes {
-		j.partial = true
+		j.partial.Store(true)
 		return fmt.Errorf("snapshot budget of %d MiB reached", undoMaxTurnBytes>>20)
 	}
 	if err := store.EnsureDir(filepath.Dir(path), store.DirPerm); err != nil {
@@ -781,9 +996,7 @@ func (j *undoJournal) incomplete() bool {
 	if j == nil {
 		return false
 	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.partial
+	return j.partial.Load()
 }
 
 // turnChangedFiles is how many paths the turn touched, for the undo menu.

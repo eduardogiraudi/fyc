@@ -139,6 +139,35 @@ func sessionLogContext(ctx context.Context, s *ChatSession) context.Context {
 	return logger.WithSession(ctx, s.SessionID)
 }
 
+// interruptTurn aborts the turn in flight: the provider stream and a tool that
+// is running stop through the turn context. Before that context exists
+// (ProcessInput is still preparing the prompt) there is nothing to cancel, so
+// the interrupt is latched and newGenerationContext starts already cancelled —
+// a ctrl+c sent before the first token must never be swallowed.
+func (s *ChatSession) interruptTurn() {
+	if s == nil {
+		return
+	}
+	s.GenerationCancelMu.Lock()
+	if s.GenerationCancel != nil {
+		s.GenerationCancel()
+	} else {
+		s.interruptRequested = true
+	}
+	s.GenerationCancelMu.Unlock()
+}
+
+// clearInterrupt drops a latched interrupt that no turn consumed, so it cannot
+// abort the next one. The chat calls it when a prompt is submitted.
+func (s *ChatSession) clearInterrupt() {
+	if s == nil {
+		return
+	}
+	s.GenerationCancelMu.Lock()
+	s.interruptRequested = false
+	s.GenerationCancelMu.Unlock()
+}
+
 // newGenerationContext creates the cancellable context of a turn and sets the
 // generating flag. It is derived from the active run context (RunCtx in the
 // AG-UI server, a background context in the TUI) and lives for the whole turn:
@@ -154,7 +183,12 @@ func newGenerationContext(s *ChatSession) context.Context {
 	s.GenerationCancelMu.Lock()
 	s.GenerationCancel = cancel
 	s.turnCtx = ctx
+	interrupted := s.interruptRequested
+	s.interruptRequested = false
 	s.GenerationCancelMu.Unlock()
+	if interrupted {
+		cancel()
+	}
 	s.IsGenerating.Store(1)
 	return ctx
 }

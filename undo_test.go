@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,6 +124,14 @@ func journalSession(t *testing.T, history []types.Message) (*ChatSession, string
 	return s, root
 }
 
+// journalTouch simulates a tool that writes anywhere (`sh`, a git rewrite): the
+// turn records the workspace fingerprint (Sync) and the dispatcher captures the
+// pre-image right before the call (PrepareTree).
+func journalTouch(s *ChatSession, root string, ig *tools.IgnoreManager) {
+	s.journal.Sync(root, ig)
+	s.journal.PrepareTree(root, ig)
+}
+
 func TestRewindRevertsFilesOfTheDiscardedTurns(t *testing.T) {
 	s, root := journalSession(t, undoHistory())
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("original\n"), 0o644); err != nil {
@@ -128,7 +139,7 @@ func TestRewindRevertsFilesOfTheDiscardedTurns(t *testing.T) {
 	}
 	// Turn 1 begins with the file as it is now.
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	// The turn rewrites it (what any tool, sh included, would do) and then the
 	// dispatcher collects the diff.
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("ruined\n"), 0o644); err != nil {
@@ -162,7 +173,7 @@ func TestRewindKeepsAFileEditedAfterTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	if err := os.WriteFile(path, []byte("model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +204,7 @@ func TestRewindKeepsAFileEditedAfterTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2.journal.BeginTurn(1)
-	s2.journal.Sync(root2, nil)
+	journalTouch(s2, root2, nil)
 	if err := os.WriteFile(path2, []byte("model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +227,7 @@ func TestUndoJournalSurvivesASaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	if err := os.WriteFile(path, []byte("model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +414,7 @@ func TestJournalDoesNotRecordAnUnvisitedFileAsDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 
 	// The turn hides the file behind a new ignore rule.
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("keep.txt\n"), 0o644); err != nil {
@@ -431,7 +442,7 @@ func TestJournalStillRecordsARealDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +468,7 @@ func TestUndoAsksAboutAFileChangedAfterTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	if err := os.WriteFile(path, []byte("model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +498,7 @@ func TestJournalRecordsADotDotFileName(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(root, nil)
+	journalTouch(s, root, nil)
 	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +534,7 @@ func TestUndoRestoresThroughASymlinkedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.journal.BeginTurn(1)
-	s.journal.Sync(link, nil)
+	journalTouch(s, link, nil)
 	if err := os.WriteFile(path, []byte("model\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -576,5 +587,203 @@ func TestInsideRootFollowsSymlinks(t *testing.T) {
 		if got := insideRoot(tc.root, tc.abs); got != tc.want {
 			t.Errorf("%s: insideRoot(%q, %q) = %v, want %v", tc.name, tc.root, tc.abs, got, tc.want)
 		}
+	}
+}
+
+// blobFiles is how many pre-images the journal stored so far.
+func blobFiles(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, "blobs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+// blobHashes is the set of contents the journal stored, keyed by hash.
+func blobHashes(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, "blobs"))
+	out := map[string]bool{}
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out
+		}
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		out[entry.Name()] = true
+	}
+	return out
+}
+
+// hashOf is the content address the journal stores a version under.
+func hashOf(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// Starting a turn must not copy the workspace: Sync records fingerprints only.
+// The bytes are captured by the copy-on-write pass (Prepare) or, once, before a
+// tool that cannot name its targets (PrepareTree).
+func TestTurnStartDoesNotCopyTheWorkspace(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	const files = 12
+	for i := 0; i < files; i++ {
+		name := fmt.Sprintf("f%02d.txt", i)
+		if err := os.WriteFile(filepath.Join(root, name), []byte(strings.Repeat(name, 20)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	if n := blobFiles(t, s.journal.dir); n != 0 {
+		t.Fatalf("Sync stored %d pre-images, want none", n)
+	}
+
+	// A tool that writes anywhere gets the workspace as its pre-image, and pays
+	// for it only once.
+	s.journal.PrepareTree(root, nil)
+	if n := blobFiles(t, s.journal.dir); n != files {
+		t.Fatalf("PrepareTree stored %d pre-images, want %d", n, files)
+	}
+	s.journal.PrepareTree(root, nil)
+	if n := blobFiles(t, s.journal.dir); n != files {
+		t.Fatalf("a second PrepareTree stored %d pre-images, want %d", n, files)
+	}
+}
+
+// A write tool declares its target, so only that file is copied before the call
+// and the rewind still restores it. No workspace copy is involved.
+func TestWriteToolIsPreparedFileByFile(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	// The write tool asks for permission when the setting allows it.
+	previousNoAsk := config.Get().NoAsk
+	config.SetNoAsk(true)
+	t.Cleanup(func() { config.SetNoAsk(previousNoAsk) })
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(other, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools.SetTurnJournal(s.journal)
+	t.Cleanup(func() { tools.SetTurnJournal(nil) })
+
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	if res := executeToolForTest(s, "write", map[string]any{"path": path, "content": "ruined\n"}); strings.HasPrefix(res, "error") {
+		t.Fatalf("write failed: %s", res)
+	}
+	// Only the written file is copied, as its pre-image and its result; the file
+	// the call did not name keeps no bytes at all.
+	if got, want := blobHashes(t, s.journal.dir), map[string]bool{hashOf("original\n"): true, hashOf("ruined\n"): true}; len(got) != len(want) || !got[hashOf("original\n")] {
+		t.Fatalf("stored blobs = %v, want the written file only", got)
+	}
+	if _, err := os.Stat(filepath.Join(s.journal.dir, "blobs", hashOf("untouched\n"))); !os.IsNotExist(err) {
+		t.Fatal("a file the call never named was copied")
+	}
+
+	if _, err := s.rewindToTurn(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "original\n" {
+		t.Fatalf("file = %q, want the pre-turn content", data)
+	}
+}
+
+// A file that changed without any pass capturing its bytes cannot be restored:
+// the rewind must say it was skipped instead of writing an empty file.
+func TestUnpreparedChangeIsReportedNotRestored(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	path := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	// Something no tool declared rewrites the file: the journal has its
+	// fingerprint but not its bytes.
+	if err := os.WriteFile(path, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.Collect(root, nil)
+
+	out, err := s.rewindToTurn(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Files.Skipped) != 1 || out.Files.Skipped[0] != "b.txt" {
+		t.Fatalf("skipped = %+v, want b.txt", out.Files)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "two\n" {
+		t.Fatalf("file = %q, the uncaptured version was overwritten", data)
+	}
+}
+
+// A capture pass reads a whole batch in parallel and keeps every file.
+func TestCapturePassReadsEveryFile(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	const files = 64
+	for i := 0; i < files; i++ {
+		name := fmt.Sprintf("f%03d.txt", i)
+		if err := os.WriteFile(filepath.Join(root, name), []byte(strings.Repeat(name, 10)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _ := s.journal.walkEntries(nil)
+	if len(entries) != files {
+		t.Fatalf("walked %d files, want %d", len(entries), files)
+	}
+	versions := s.journal.captureAll(entries)
+	if len(versions) != files {
+		t.Fatalf("captured %d files, want %d", len(versions), files)
+	}
+	for _, e := range entries {
+		ver, ok := versions[changeKey(e.root, e.rel)]
+		if !ok || !ver.recoverable() || ver.unrecoverable {
+			t.Fatalf("%s was not captured: %+v", e.rel, ver)
+		}
+	}
+	if w := captureWorkers(); w < 1 || w > 16 {
+		t.Fatalf("captureWorkers() = %d, want a bounded pool", w)
+	}
+}
+
+// `sh` names no targets, so the dispatcher captures the workspace before running
+// it: the file the command overwrites is still revertible.
+func TestShellCommandIsCoveredByTheTreePass(t *testing.T) {
+	s, root := journalSession(t, undoHistory())
+	previousNoAsk := config.Get().NoAsk
+	config.SetNoAsk(true)
+	t.Cleanup(func() { config.SetNoAsk(previousNoAsk) })
+
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools.SetTurnJournal(s.journal)
+	t.Cleanup(func() { tools.SetTurnJournal(nil) })
+
+	s.journal.BeginTurn(1)
+	s.journal.Sync(root, nil)
+	res := executeToolForTest(s, "sh", map[string]any{"command": "printf 'ruined\\n' > a.txt"})
+	if strings.HasPrefix(res, "error") || strings.Contains(res, "error") {
+		t.Skipf("sh is not runnable here: %s", res)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "ruined\n" {
+		t.Skipf("the command did not run: %q", data)
+	}
+	if _, err := s.rewindToTurn(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "original\n" {
+		t.Fatalf("file = %q, want the pre-turn content", data)
 	}
 }
