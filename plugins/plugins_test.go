@@ -115,7 +115,9 @@ func TestInstallScopeSnapshotReplacementAndTampering(t *testing.T) {
 	if len(Load(workspace)) != 1 || len(Load(other)) != 1 {
 		t.Fatal("global visibility/project override failed")
 	}
-	if Load(workspace)[0].Entry.Workspace != workspace || Load(other)[0].Entry.Workspace != "" {
+	// The stored scope keeps the session's resolved spelling, so compare scopes
+	// (macOS /var -> /private/var, Windows 8.3 names) instead of paths verbatim.
+	if !sameScope(Load(workspace)[0].Entry.Workspace, workspace) || Load(other)[0].Entry.Workspace != "" {
 		t.Fatal("wrong plugin precedence")
 	}
 	if err := os.MkdirAll(filepath.Join(dest, ".git/hooks"), 0o700); err != nil {
