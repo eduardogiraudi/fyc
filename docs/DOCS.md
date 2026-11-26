@@ -9,7 +9,7 @@ The Go module and default binary name are both `fuckyourcli`; application-owned 
 - Setup: [Requirements](#requirements) · [Build](#build) · [Install](#install) · [Configuration](#configuration) · [OpenAI Codex (OAuth)](#openai-codex-oauth)
 - Using it: [Usage](#usage) · [Rewinding a turn](#rewinding-a-turn) · [Multiple workspace roots](#multiple-workspace-roots-cd) · [Reasoning / thinking](#reasoning--thinking) · [Prompt caching](#prompt-caching) · [Auto-compaction](#auto-compaction) · [Modes](#modes)
 - Customisation: [Tool hooks](#tool-hooks-prepost) · [Status bar hook](#status-bar-hook) · [System prompt](#system-prompt-persona) · [Project instructions (AGENTS.md)](#project-instructions-agentsmd)
-- Tools & integrations: [Built-in tools](#built-in-tools) · [LSP servers](#lsp-servers) · [Git tools](#git-tools) · [MCP servers](#mcp-servers) · [AG-UI backend](#ag-ui-backend)
+- Tools & integrations: [Built-in tools](#built-in-tools) · [LSP servers](#lsp-servers) · [Git tools](#git-tools) · [MCP servers](#mcp-servers) · [Plugins](#plugins-fuckyourcli-add) · [AG-UI backend](#ag-ui-backend)
 - Internals: [Runtime files](#runtime-files) · [Architecture](#architecture) · [Security model](#security-model) ([Windows sandbox](#windows-sandbox)) · [Development](#development)
 
 ## Requirements
@@ -311,6 +311,7 @@ fuckyourcli sandbox     # Windows: setup|status|reset the dedicated-user command
 fuckyourcli status      # check for a newer public release
 fuckyourcli update      # download, verify (SHA-256) and install the latest release
 fuckyourcli models      # show the model catalog; 'models update' refreshes it from models.dev
+fuckyourcli add <src>   # install an Agent Plugin (skills + MCP) for this project
 ```
 
 `--hash` prints only the running executable's SHA-256: 64 lowercase hexadecimal characters followed by a newline, suitable for copying or scripts. It does not load configuration, start chat, or show a banner. If the executable cannot be read, it reports an error on stderr and exits with status 1 instead of printing a checksum.
@@ -754,6 +755,24 @@ Supported transports:
 
 Configured MCP servers can be enabled/disabled from the config UI. MCP resource tools can also be hidden from the AI through the global Enable/Disable Tools menu. On startup, the app initializes enabled MCP servers, loads their tools, prefixes each tool name with the server name, and retries once on EOF / client-closing errors by reconnecting the session.
 
+## Plugins (`fuckyourcli add`)
+
+`fuckyourcli add <source>` installs a portable [Agent Plugins 1.0.0](https://agent-plugins.org/) package: a root `plugin.json`, `skills/<name>/SKILL.md` directories and an optional `mcp.json`. Sources: a local plugin directory, `owner/repo`, a GitHub repository URL, or an HTTPS ZIP with `plugin.json` at its root. Options: `--project` (default) or `--global` scope, `--ref` (GitHub branch/tag/commit, default `HEAD`), `--subdir` (plugin directory inside the source), `--replace` (review and replace an existing installation), `--yes` (approve without the prompt).
+
+```bash
+fuckyourcli add ./my-plugin
+fuckyourcli add owner/repo --subdir plugins/my-plugin --ref v1.0.0
+fuckyourcli add owner/repo --global
+fuckyourcli add ./my-plugin --replace
+```
+
+- **Scopes.** Project scope installs into `<root>/.fyc/plugins/<name>` and applies only to sessions started in that directory; `--global` installs into `<config dir>/plugins/<name>` for every project. A project plugin overrides a global plugin with the same name. Skills and MCP servers are namespaced `<plugin>--<component>`.
+- **Approval and integrity.** The installer snapshots the package, previews its skills and MCP commands (credential values hidden) and asks for confirmation. The approval record — including a SHA-256 digest of every installed file — lives in `<config dir>/plugins.json`, never in the repository: cloning someone else's `.fyc/plugins` does not approve their MCP processes. At startup every installed file is re-hashed; a bundle that changed or cannot be read is disabled with a notice until you review it again with `add --replace`. Update the source and reinstall rather than editing the installed copy; delete the installed directory to uninstall.
+- **What is read from a local source.** Repository metadata (`.git`, including a linked-worktree pointer file) and dependency/cache directories (`.venv`, `venv`, `node_modules`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.tox`, `.nox`) are skipped: they embed machine-specific paths and can never be portable plugin content. Symlinks and special files anywhere else are refused, as are unsafe archive paths, escaped destinations and oversized packages (8 MB per file, 64 MB total, 4096 files).
+- **Runtime.** No install scripts or hooks run. MCP servers start in the next session; **local MCP commands run on the host, outside the tool sandbox**, with their working directory set to the plugin root. fyc exports `PLUGIN_ROOT` (the installed bundle) and `PLUGIN_DATA` (`<config dir>/plugin-data/<scope>/<name>`, the mutable data directory) to stdio servers, and points `PYTHONPYCACHEPREFIX` and `UV_PROJECT_ENVIRONMENT` at `PLUGIN_DATA` so Python bytecode caches and uv environments stay out of the integrity-checked bundle; a plugin can override either through its own `env`. Keep every file the server writes under `${PLUGIN_DATA}`: anything left in the plugin root changes the digest and disables the plugin at the next start.
+- **Credentials.** Use `${VARIABLE}` placeholders, never literal secrets. Missing values can be entered at install time with a masked prompt (skipped with `--yes`) and are stored in `auth.json`; the environment is the fallback. A plugin whose credentials are missing stays installed but its MCP servers stay disabled until configured. HTTP servers needing OAuth use an explicit login: `fuckyourcli mcp login <plugin>--<server>` (see [MCP servers](#mcp-servers)).
+- **Not supported:** installation scripts, hooks, host-specific MCP extensions, legacy Codex/Claude manifests and marketplace catalogs.
+
 ## Runtime Files
 
 `<config dir>` is `store.ConfigDir()`: `~/.config/fyc` on Linux, `~/Library/Application Support/fyc` on macOS, and `%APPDATA%\fyc` on Windows. `FYC_CONFIG_DIR` overrides it on every platform; Linux also honours an absolute `XDG_CONFIG_HOME`. Configuration, secrets, the model catalog, fyc skills, preferences and the persona all use this directory.
@@ -767,6 +786,9 @@ Configured MCP servers can be enabled/disabled from the config UI. MCP resource 
 | `<config dir>/SYSTEM_PROMPT.txt` | User-editable base system prompt (persona) with `${VAR}` placeholders. |
 | `<config dir>/skills/`, `~/.agents/skills/`, `~/.claude/skills/`, `[root]/.claude/skills/`, `[root]/.fyc/skills/`, `[root]/.agents/skills/` | Installed skills. `[root]` is every allowed root, the primary one first. |
 | `<config dir>/models.json` | The models.dev catalog. `fuckyourcli models update` overwrites the installed copy; `./update_catalog.sh` refreshes the bundled `models/catalog.json` for releases. The installers copy the bundled catalog here. Missing/empty is fine: `/reasoning` simply shows no catalog line. |
+| `<config dir>/plugins.json` | Approval records for installed plugins (scope, path, SHA-256 digest of every file). Written by `fuckyourcli add`; see [Plugins](#plugins-fuckyourcli-add). |
+| `<config dir>/plugins/` · `[root]/.fyc/plugins/` | Installed plugin bundles (global and project scope). Integrity-checked at startup; never edited in place. |
+| `<config dir>/plugin-data/<scope>/<name>/` | Mutable per-plugin data (`PLUGIN_DATA`): credentials-adjacent state, redirected Python bytecode caches and uv environments. Outside the integrity-checked bundle. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/codex-version.json` | Stable upstream Codex compatibility version and last successful check; uses the platform cache directory (`FYC_CACHE_DIR` override), with atomic writes and `.bak` recovery. |
 | `~/.fyc_history` | Prompt history, capped at the most recent 500 entries with consecutive duplicates collapsed. |
 | `${XDG_CACHE_HOME:-~/.cache}/fyc/<cwd-hash>/index.json` | Per-workspace session index: one entry per chat (id, title, timestamps, message count). |

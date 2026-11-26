@@ -66,7 +66,22 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 	return b, err
 }
 
-func snapshot(dir string, skipGit bool) (map[string]File, error) {
+// junkDirs are skipped while reading a local source: dependency and tool-cache
+// directories embed machine-specific paths, symlinks or compiled artifacts and
+// can never be part of a portable plugin.
+var junkDirs = map[string]bool{
+	".venv": true, "venv": true, "node_modules": true, "__pycache__": true,
+	".pytest_cache": true, ".ruff_cache": true, ".mypy_cache": true,
+	".tox": true, ".nox": true,
+}
+
+// snapshot reads a whole directory into memory. source is a directory the user
+// pointed add at: repository metadata (.git, including a worktree pointer
+// file) and junkDirs are skipped. The installed bundle is read strictly
+// instead: every file present takes part in the integrity digest, so a runtime
+// that writes into its own plugin directory disables the plugin instead of
+// silently replacing approved bytes.
+func snapshot(dir string, source bool) (map[string]File, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
@@ -78,10 +93,18 @@ func snapshot(dir string, skipGit bool) (map[string]File, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			if skipGit && d.Name() == ".git" {
-				return fs.SkipDir
+		if source {
+			// A development tree carries repository metadata and dependency or
+			// cache directories that can never be portable plugin content:
+			// machine-specific paths, symlinks, compiled artifacts.
+			if d.Name() == ".git" || junkDirs[d.Name()] {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
 			}
+		}
+		if d.IsDir() {
 			return nil
 		}
 		if !safePath(p) {
@@ -324,6 +347,13 @@ func (p *Package) MCPServers(root, dataDir string, expand func(string) (string, 
 				}
 			}
 			cfg.Env["PLUGIN_ROOT"], cfg.Env["PLUGIN_DATA"] = root, dataDir
+			// Keep runtime caches out of the integrity-checked bundle: Python
+			// writes __pycache__ next to the imported sources and uv creates
+			// .venv in the project directory, and either would change the
+			// approved digest on the next start. Both are pointed at the mutable
+			// data dir; a plugin can still override either through its own env.
+			cfg.Env["PYTHONPYCACHEPREFIX"] = filepath.Join(dataDir, "pycache")
+			cfg.Env["UV_PROJECT_ENVIRONMENT"] = filepath.Join(dataDir, "venv")
 		}
 		for _, arg := range s.Args {
 			v, err := resolve(arg)

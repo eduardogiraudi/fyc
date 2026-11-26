@@ -38,13 +38,37 @@ func readRegistry() (registry, error) {
 	return r, nil
 }
 
+// resolveWorkspace spells a workspace the way the session does, with symlinks
+// resolved, so an install and a later session compare equal even when the user
+// reaches the same checkout through a symlinked path.
+func resolveWorkspace(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	if resolved, err := store.ResolvePath(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
+
+// sameScope compares two registry scopes: "" is the global one, anything else
+// is a workspace and matches by resolved path, so a legacy entry stored under
+// a different spelling of the same directory is replaced, not duplicated.
+func sameScope(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	return store.SamePath(a, b)
+}
+
 func Destination(workspace string, global bool, name string) (string, error) {
 	if !validID(name) {
 		return "", fmt.Errorf("invalid plugin name")
 	}
 	base := store.ConfigDir()
 	if !global {
-		base = filepath.Join(workspace, ".fyc")
+		base = filepath.Join(resolveWorkspace(workspace), ".fyc")
 	}
 	return filepath.Abs(filepath.Join(base, "plugins", name))
 }
@@ -57,10 +81,7 @@ func Install(p *Package, workspace string, global, replace bool) (string, error)
 		return "", err
 	}
 	p = validated
-	workspace, err = filepath.Abs(workspace)
-	if err != nil {
-		return "", err
-	}
+	workspace = resolveWorkspace(workspace)
 	dest, err := Destination(workspace, global, p.Name)
 	if err != nil {
 		return "", err
@@ -139,7 +160,7 @@ func Install(p *Package, workspace string, global, replace bool) (string, error)
 	entry := Entry{Name: p.Name, Path: dest, Workspace: scope, Digest: digest(p.Files)}
 	next := make([]Entry, 0, len(reg.Plugins)+1)
 	for _, old := range reg.Plugins {
-		if old.Name != entry.Name || old.Workspace != entry.Workspace {
+		if old.Name != entry.Name || !sameScope(old.Workspace, entry.Workspace) {
 			next = append(next, old)
 		}
 	}
@@ -156,10 +177,7 @@ func Install(p *Package, workspace string, global, replace bool) (string, error)
 // Load validates approved bytes before exposing skills or executable servers.
 // Project installations override a global plugin with the same name.
 func Load(workspace string) []Installed {
-	workspace, err := filepath.Abs(workspace)
-	if err != nil {
-		return nil
-	}
+	workspace = resolveWorkspace(workspace)
 	reg, err := readRegistry()
 	if err != nil {
 		store.Notice("plugins: %v", err)
@@ -172,7 +190,7 @@ func Load(workspace string) []Installed {
 		}
 	}
 	for _, e := range reg.Plugins {
-		if e.Workspace == workspace {
+		if sameScope(e.Workspace, workspace) {
 			selected[e.Name] = e
 		}
 	}

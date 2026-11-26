@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"fuckyourcli/types"
 )
 
 func fixture(t *testing.T) string {
@@ -162,6 +164,129 @@ func TestUnapprovedCloneAndSymlinks(t *testing.T) {
 	}
 	if _, err := Prepare(context.Background(), local, "", ""); err == nil {
 		t.Fatal("accepted package symlink")
+	}
+}
+
+func TestSourceSkipsDependencyAndCacheDirs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks")
+	}
+	source := fixture(t)
+	junk := map[string]string{
+		".venv/pyvenv.cfg":            "home = /usr",
+		"node_modules/pkg/index.js":   "x",
+		"src/mymod/__pycache__/a.pyc": "x",
+		".pytest_cache/CACHEDIR.TAG":  "x",
+	}
+	for name, data := range junk {
+		p := filepath.Join(source, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// uv-style venv: bin/python is a symlink to the interpreter.
+	if err := os.MkdirAll(filepath.Join(source, ".venv/bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(source, ".venv/bin/python")); err != nil {
+		t.Fatal(err)
+	}
+	// A linked worktree stores a .git pointer file, not a directory.
+	if err := os.WriteFile(filepath.Join(source, ".git"), []byte("gitdir: /elsewhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Prepare(context.Background(), source, "", "")
+	if err != nil {
+		t.Fatalf("source with dependency dirs refused: %v", err)
+	}
+	for name := range junk {
+		if _, ok := p.Files[name]; ok {
+			t.Fatalf("junk file installed: %s", name)
+		}
+	}
+	if _, ok := p.Files[".git"]; ok {
+		t.Fatal("worktree pointer file installed")
+	}
+	if _, ok := p.Files["plugin.json"]; !ok {
+		t.Fatal("plugin content lost")
+	}
+}
+
+func TestWorkspaceSpellingIsResolved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks")
+	}
+	t.Setenv("FYC_CONFIG_DIR", t.TempDir())
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	p := prepareFixture(t)
+	if _, err := Install(p, link, false, false); err != nil {
+		t.Fatal(err)
+	}
+	// The session resolves its root: the plugin must load through either spelling.
+	if len(Load(real)) != 1 || len(Load(link)) != 1 {
+		t.Fatal("plugin not found through the resolved workspace spelling")
+	}
+	// Reinstalling through the other spelling replaces the entry instead of duplicating it.
+	if _, err := Install(p, real, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(Load(real)); got != 1 {
+		t.Fatalf("duplicate registry entry: %d plugins", got)
+	}
+}
+
+func TestStdioServerCacheEnv(t *testing.T) {
+	p := prepareFixture(t)
+	root, data := t.TempDir(), t.TempDir()
+	servers, err := p.MCPServers(root, data, func(v string) (string, error) { return v, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local *types.MCPServerConfig
+	for i := range servers {
+		if servers[i].Transport == "stdio" {
+			local = &servers[i]
+		}
+	}
+	if local == nil {
+		t.Fatal("no stdio server in fixture")
+	}
+	if local.Env["PYTHONPYCACHEPREFIX"] != filepath.Join(data, "pycache") {
+		t.Fatalf("PYTHONPYCACHEPREFIX: %q", local.Env["PYTHONPYCACHEPREFIX"])
+	}
+	if local.Env["UV_PROJECT_ENVIRONMENT"] != filepath.Join(data, "venv") {
+		t.Fatalf("UV_PROJECT_ENVIRONMENT: %q", local.Env["UV_PROJECT_ENVIRONMENT"])
+	}
+	if local.Env["MODE"] != "read" {
+		t.Fatal("plugin-provided env lost")
+	}
+	// A plugin can redirect the caches itself through its own env.
+	files := map[string]File{}
+	for k, v := range p.Files {
+		files[k] = v
+	}
+	files["mcp.json"] = File{Data: []byte(`{"$schema":"` + MCPSchema + `","mcpServers":{"x":{"type":"stdio","command":"x","env":{"PYTHONPYCACHEPREFIX":"/tmp/custom"}}}}`)}
+	override, err := parse(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err = override.MCPServers(root, data, func(v string) (string, error) { return v, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers[0].Env["PYTHONPYCACHEPREFIX"] != "/tmp/custom" {
+		t.Fatalf("plugin env override lost: %q", servers[0].Env["PYTHONPYCACHEPREFIX"])
 	}
 }
 

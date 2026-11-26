@@ -20,7 +20,7 @@ const addUsage = `Usage: fuckyourcli add <source> [--project|--global] [--ref RE
 Sources: local plugin directory, owner/repo, GitHub repository URL, HTTPS ZIP URL.
 Default scope: current project. GitHub defaults to its default branch (HEAD).
 Only Agent Plugins 1.0.0 plugin.json + skills/ + mcp.json are supported.
-No install scripts, hooks, or MCP processes run during installation.
+Local sources skip .git and dependency/cache directories (.venv, node_modules, __pycache__, ...).
 `
 
 type addOptions struct {
